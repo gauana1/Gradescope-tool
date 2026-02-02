@@ -1,0 +1,17 @@
+# Authentication
+gradescope_auth.json
+
+# Output directory
+# Note: If you want to commit the archives, remove the line below
+gradescope_archive/
+
+# Virtual environment
+.venv/
+
+# Debug files
+debug_*.html
+debug_*.png
+
+# Python cache
+__pycache__/
+*.pyc
