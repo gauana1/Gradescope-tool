@@ -2,7 +2,9 @@
 import argparse
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+import json
 import gradescope_lib as gs_lib
+import gradescope_course_manager as gcm
 
 def main():
     parser = argparse.ArgumentParser(
@@ -13,6 +15,7 @@ def main():
     parser.add_argument('--interactive', action='store_true', help='Run in interactive mode to select courses one-by-one.')
     parser.add_argument('--download-all', action='store_true', help='Download all courses and assignments (non-interactive).')
     parser.add_argument('--test-course', type=str, help='Download a single course by its full name.')
+    parser.add_argument('--update-courses', action='store_true', help='Update the courses.json file with the latest course list.')
     args = parser.parse_args()
 
     if args.setup:
@@ -50,8 +53,14 @@ def main():
             else:
                 print(f"ERROR: Course '{args.test_course}' not found.")
                 print("Please make sure you are using the exact full name from the course list.")
+        elif args.update_courses:
+            print("--- Updating courses.json ---")
+            all_courses = gs_lib.get_courses(page)
+            updated_courses = gcm.update_course_data(all_courses)
+            print("\n--- courses.json content: ---")
+            print(json.dumps(updated_courses, indent=4))
         else:
-            print("--- Listing All Discovered Courses (run with --interactive or --test-course to download) ---")
+            print("--- Listing All Discovered Courses (run with --interactive, --test-course, or --update-courses) ---")
             all_courses = gs_lib.get_courses(page)
             if all_courses:
                 for course in all_courses:
