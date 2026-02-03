@@ -108,31 +108,26 @@ def get_courses(page: Page) -> list:
     return courses
 
 def download_assignment(page: Page, assignment_name: str, assignment_url: str, assignment_dir: Path):
-    """Downloads files for an assignment, prioritizing direct downloads over graded PDFs."""
+    """Downloads files for an assignment, attempting all available downloads."""
     print(f"  -> Processing assignment: {assignment_name}")
     page.goto(assignment_url)
     page.wait_for_load_state('networkidle')
     
     assignment_dir.mkdir(parents=True, exist_ok=True)
     
-    # --- Attempt 1: Direct downloads (archives, code files) ---
-    if _try_direct_downloads(page, assignment_dir):
-        print("    ✓ Direct download successful")
-        time.sleep(CONFIG['delay'])
-        return
-    
-    # --- Attempt 2: Fallback to Graded PDF ---
-    print("    No direct downloads found. Falling back to Graded PDF...")
-    if _try_graded_pdf_download(page, assignment_name, assignment_dir):
-        print("    ✓ Graded PDF downloaded")
+    # Attempt all direct downloads (archives, code files, PDFs)
+    overall_download_count = _try_direct_downloads(page, assignment_name, assignment_dir)
+
+    if overall_download_count > 0:
+        print(f"    ✓ Downloaded {overall_download_count} file(s) for '{assignment_name}'.")
     else:
-        print("    ✗ No files could be downloaded for this assignment")
+        print(f"    ✗ No files could be downloaded for '{assignment_name}'.")
     
     time.sleep(CONFIG['delay'])
 
 
-def _try_direct_downloads(page: Page, assignment_dir: Path) -> bool:
-    """Attempt to download files directly. Returns True if successful."""
+def _try_direct_downloads(page: Page, assignment_name: str, assignment_dir: Path) -> int:
+    """Attempt to download all available files directly. Returns the count of successful downloads."""
     print("    Looking for direct download links...")
     
     direct_download_selectors = [
@@ -148,15 +143,24 @@ def _try_direct_downloads(page: Page, assignment_dir: Path) -> bool:
         'a[href$=".c"]',
         'a[href$=".h"]',
         'a[href$=".txt"]',
+        'a[href$=".pdf"]', # Added to handle PDFs here
+        'a:has-text("Download Graded Copy")', # Specific selector for graded PDF
     ]
     
+    successful_downloads = 0
+    
+    # Use a set to track already processed URLs to avoid redundant downloads if multiple selectors match the same link
+    downloaded_urls = set()
+
     for selector in direct_download_selectors:
         links = page.locator(selector).all()
         
         for i, link in enumerate(links):
             try:
-                # Get link info for debugging
-                href = link.get_attribute('href') or 'unknown'
+                href = link.get_attribute('href')
+                if not href or href in downloaded_urls:
+                    continue # Skip if no href or already processed
+                
                 print(f"    Attempting download {i+1} (selector: '{selector}', href: '{href[:50]}...')")
                 
                 with page.expect_download(timeout=15000) as d_info:
@@ -168,17 +172,23 @@ def _try_direct_downloads(page: Page, assignment_dir: Path) -> bool:
                 download.save_as(filepath)
                 
                 print(f"      ✓ Downloaded: '{filename}'")
+                successful_downloads += 1
+                downloaded_urls.add(href) # Mark this URL as downloaded
                 
                 # Extract if it's an archive
                 _extract_if_archive(filepath, assignment_dir)
                 
-                return True  # Success! (change to not return if you want all files)
-                
             except Exception as e:
-                print(f"      ✗ Download failed: {str(e)[:100]}")
+                print(f"      ✗ Download failed for link (selector: '{selector}', href: '{href[:50] if href else 'N/A'}'). Details: {str(e)[:100]}")
                 continue
     
-    return False  # No successful downloads
+    # Fallback: Also attempt to download graded PDF using requests if no Playwright download was triggered
+    # This acts as a robust fallback for "Download Graded Copy" if the click above fails to trigger a Playwright download
+    if successful_downloads == 0:
+        if _try_graded_pdf_download_requests(page, assignment_name, assignment_dir):
+            successful_downloads += 1
+
+    return successful_downloads
 
 
 def _extract_if_archive(filepath: Path, extract_to: Path):
@@ -256,15 +266,16 @@ def _get_full_extension(filepath: Path) -> str:
         return filepath.suffix.lower()
 
 
-def _try_graded_pdf_download(page: Page, assignment_name: str, assignment_dir: Path) -> bool:
-    """Attempt to download the graded PDF. Returns True if successful."""
+def _try_graded_pdf_download_requests(page: Page, assignment_name: str, assignment_dir: Path) -> bool:
+    """Attempt to download the graded PDF directly via requests. Returns True if successful."""
     try:
-        download_link = page.get_by_role("link", name="Download Graded Copy")
-        download_link.wait_for(state='visible', timeout=5000)
+        download_link_locator = page.get_by_role("link", name="Download Graded Copy")
+        # Wait a bit for the element to be ready without strictly expecting it to be visible
+        # as we are just trying to extract href
+        pdf_url = download_link_locator.get_attribute('href', timeout=2000)
         
-        pdf_url = download_link.get_attribute('href')
         if not pdf_url:
-            print("      ✗ Could not extract PDF URL")
+            print("      ✗ Could not extract PDF URL for requests download.")
             return False
         
         # Make URL absolute
@@ -278,7 +289,7 @@ def _try_graded_pdf_download(page: Page, assignment_name: str, assignment_dir: P
                          'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
         }
         
-        print(f"    Downloading PDF from: {pdf_url[:60]}...")
+        print(f"    Downloading PDF directly via requests from: {pdf_url[:60]}...")
         response = requests.get(pdf_url, cookies=cookies, headers=headers, allow_redirects=True)
         response.raise_for_status()
         
@@ -288,11 +299,11 @@ def _try_graded_pdf_download(page: Page, assignment_name: str, assignment_dir: P
         filepath = assignment_dir / filename
         
         filepath.write_bytes(response.content)
-        print(f"      ✓ Saved: '{filename}'")
+        print(f"      ✓ Saved (requests): '{filename}'")
         return True
         
     except Exception as e:
-        print(f"      ✗ PDF download failed: {e}")
+        print(f"      ✗ PDF download (requests) failed: {e}")
         return False
 def download_course(page: Page, course: dict, output_dir: str):
     """Downloads all graded assignments for one course."""
