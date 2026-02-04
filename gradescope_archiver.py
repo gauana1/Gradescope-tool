@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
 import argparse
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 import json
+import shutil
 import gradescope_lib as gs_lib
 import gradescope_course_manager as gcm
 
@@ -35,8 +35,9 @@ def main():
         for course_id, course_data in courses_data.items():
             if course_data.get('rename'):
                 print(f"Renaming course: '{course_data['full_name']}' to '{course_data['rename']}'")
-                gs_lib.rename_course_repo(course_data['full_name'], course_data['rename'], course_id)
-                gcm.rename_course_in_json(course_id, course_data['rename'])
+                rename_successful = gs_lib.rename_course_repo(course_data['full_name'], course_data['rename'], course_id)
+                if rename_successful:
+                    gcm.rename_course_in_json(course_id, course_data['rename'])
         
         print("\n--- Course renaming finished. ---")
         return
@@ -63,7 +64,11 @@ def main():
                 
                 sanitized_name = "".join([c for c in course['full_name'] if c.isalnum() or c in ' -']).strip()
                 course_dir = Path(gs_lib.CONFIG['output_dir']) / sanitized_name
-                gs_lib.create_git_repo(course_dir, course)  # pass full dict
+                success = gs_lib.create_git_repo(course_dir, course)
+
+                if success:
+                    shutil.rmtree(course_dir)
+                    print(f"Local directory for {course['full_name']} deleted safely.")
  
             print("\n--- All courses have been processed. ---")
         elif args.test_course:

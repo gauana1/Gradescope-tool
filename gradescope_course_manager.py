@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-COURSES_FILE = "courses.json"
+COURSES_FILE = Path(__file__).parent / "courses.json"
 
 def load_courses_from_json():
     """Loads the course data from courses.json if it exists."""

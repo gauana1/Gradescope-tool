@@ -16,3 +16,5 @@ debug_*.png
 __pycache__/
 *.pyc
 courses.json
+ignore_courses.json
+

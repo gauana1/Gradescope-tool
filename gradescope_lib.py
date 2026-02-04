@@ -42,8 +42,23 @@ def setup_auth():
         print(f"Authentication session saved to {CONFIG['auth_file']}.")
 
 def get_courses(page: Page) -> list:
-    """Return list of course dicts with parsed name components."""
+    """Return list of course dicts with parsed name components, filtering out ignored courses."""
     print("Discovering courses...")
+
+    # Load ignored courses from ignore_courses.json
+    ignore_patterns = []
+    ignore_file = Path("ignore_courses.json")
+    if ignore_file.exists():
+        with open(ignore_file, 'r') as f:
+            try:
+                ignore_patterns = json.load(f)
+                if isinstance(ignore_patterns, list):
+                    print(f"  ✓ Loaded {len(ignore_patterns)} ignore patterns.")
+                else:
+                    print("  ✗ Warning: ignore_courses.json should contain a JSON list of strings.")
+                    ignore_patterns = []
+            except json.JSONDecodeError:
+                print("  ✗ Warning: Could not parse ignore_courses.json.")
     
     # Navigate to base URL and try to click the "Back to Home" link
     page.goto('https://www.gradescope.com/')
@@ -69,7 +84,7 @@ def get_courses(page: Page) -> list:
         except Exception:
             break
     
-    courses = []
+    all_discovered_courses = []
     seen_urls = set()
     
     # Use the correct selector for Gradescope course cards
@@ -96,7 +111,7 @@ def get_courses(page: Page) -> list:
             short_name = card.locator(".courseBox--shortname").text_content().strip() if card.locator(".courseBox--shortname").count() > 0 else full_name
             term = card.locator(".courseBox--term").text_content().strip() if card.locator(".courseBox--term").count() > 0 else ""
             
-            courses.append({
+            all_discovered_courses.append({
                 'url': url,
                 'full_name': full_name,
                 'short_name': short_name,
@@ -107,9 +122,21 @@ def get_courses(page: Page) -> list:
             # Log but don't fail on individual course extraction errors
             print(f"    Warning: Failed to extract course info: {e}")
             continue
+
+    # Filter out ignored courses
+    filtered_courses = []
+    for course in all_discovered_courses:
+        is_ignored = False
+        for pattern in ignore_patterns:
+            if pattern in course['full_name']:
+                print(f"  - Ignoring course '{course['full_name']}' due to pattern: '{pattern}'")
+                is_ignored = True
+                break
+        if not is_ignored:
+            filtered_courses.append(course)
     
-    print(f"Found {len(courses)} courses.")
-    return courses
+    print(f"Found {len(filtered_courses)} courses after filtering.")
+    return filtered_courses
 
 def download_assignment(page: Page, assignment_name: str, assignment_url: str, assignment_dir: Path):
     """Downloads files for an assignment, attempting all available downloads."""
@@ -137,55 +164,55 @@ def _try_direct_downloads(page: Page, assignment_name: str, assignment_dir: Path
     """
     print("    Looking for direct download links...")
     
-    direct_download_selectors = [
-        'a[href*="/download_submission"]',
-        'a[download]',
-        'a[href$=".zip"]',
-        'a[href$=".tar.gz"]',
-        'a[href$=".tar"]',
-        'a[href$=".tgz"]',
-        'a[href$=".py"]',
-        'a[href$=".java"]',
-        'a[href$=".cpp"]',
-        'a[href$=".c"]',
-        'a[href$=".h"]',
-        'a[href$=".txt"]',
-        'a[href$=".pdf"]',
-        'a:has-text("Download Graded Copy")',  # Specific selector for graded PDF
-    ]
+    # direct_download_selectors = [
+    #     'a[href*="/download_submission"]',
+    #     'a[download]',
+    #     'a[href$=".zip"]',
+    #     'a[href$=".tar.gz"]',
+    #     'a[href$=".tar"]',
+    #     'a[href$=".tgz"]',
+    #     'a[href$=".py"]',
+    #     'a[href$=".java"]',
+    #     'a[href$=".cpp"]',
+    #     'a[href$=".c"]',
+    #     'a[href$=".h"]',
+    #     'a[href$=".txt"]',
+    #     'a[href$=".pdf"]',
+    #     'a:has-text("Download Graded Copy")',  # Specific selector for graded PDF
+    # ]
     
     successful_downloads = 0
-    downloaded_urls = set()  # Avoid duplicate downloads
+    # downloaded_urls = set()  # Avoid duplicate downloads
 
-    for selector in direct_download_selectors:
-        links = page.locator(selector).all()
+    # for selector in direct_download_selectors:
+    #     links = page.locator(selector).all()
         
-        for i, link in enumerate(links):
-            try:
-                href = link.get_attribute('href')
-                if not href or href in downloaded_urls:
-                    continue
+    #     for i, link in enumerate(links):
+    #         try:
+    #             href = link.get_attribute('href')
+    #             if not href or href in downloaded_urls:
+    #                 continue
                 
-                print(f"    Attempting download {i+1} (selector: '{selector}', href: '{href[:50]}...')")
+    #             print(f"    Attempting download {i+1} (selector: '{selector}', href: '{href[:50]}...')")
                 
-                with page.expect_download(timeout=15000) as d_info:
-                    link.click()
+    #             with page.expect_download(timeout=15000) as d_info:
+    #                 link.click()
                 
-                download = d_info.value
-                filename = download.suggested_filename
-                filepath = assignment_dir / filename
-                download.save_as(filepath)
+    #             download = d_info.value
+    #             filename = download.suggested_filename
+    #             filepath = assignment_dir / filename
+    #             download.save_as(filepath)
                 
-                print(f"      ✓ Downloaded: '{filename}'")
-                successful_downloads += 1
-                downloaded_urls.add(href)
+    #             print(f"      ✓ Downloaded: '{filename}'")
+    #             successful_downloads += 1
+    #             downloaded_urls.add(href)
                 
-                # Extract top-level archive only
-                _extract_if_archive(filepath, assignment_dir)
+    #             # Extract top-level archive only
+    #             _extract_if_archive(filepath, assignment_dir)
                 
-            except Exception as e:
-                print(f"      ✗ Download failed (selector: '{selector}'). Details: {str(e)[:100]}")
-                continue
+    #         except Exception as e:
+    #             print(f"      ✗ Download failed (selector: '{selector}'). Details: {str(e)[:100]}")
+    #             continue
     
     # Fallback: attempt to download graded PDF via requests if nothing downloaded
     if successful_downloads == 0 and _try_graded_pdf_download_requests(page, assignment_name, assignment_dir):
@@ -320,10 +347,28 @@ def download_course(page: Page, course: dict, course_id: str, output_dir: str):
     time.sleep(CONFIG['delay'])
     
 
+GITHUB_USERNAME = None
+
+def _get_github_username():
+    global GITHUB_USERNAME
+    if GITHUB_USERNAME is None:
+        try:
+            result = subprocess.run(
+                ['gh', 'api', 'user', '--jq', '.login'],
+                check=True, capture_output=True, text=True
+            )
+            GITHUB_USERNAME = result.stdout.strip()
+            print(f"  ✓ Fetched GitHub username: {GITHUB_USERNAME}")
+        except subprocess.CalledProcessError as e:
+            print(f"  ✗ Failed to fetch GitHub username: {e.stderr.strip()}")
+            GITHUB_USERNAME = "" # Set to empty to avoid repeated attempts
+    return GITHUB_USERNAME
+
+# Modify rename_course_repo
 def rename_course_repo(old_name: str, new_name: str, course_id: str):
     """
-    Renames both the local course directory and its GitHub repository
-    using the github_repo field stored in courses.json.
+    Renames the GitHub repository and, if it exists, the local course directory.
+    Uses the github_repo field stored in courses.json.
     """
     print(f"\n--- Renaming course: '{old_name}' -> '{new_name}' ---")
 
@@ -335,33 +380,47 @@ def rename_course_repo(old_name: str, new_name: str, course_id: str):
     course_info = courses_data[course_id]
     old_repo_name = course_info.get('github_repo')
     if not old_repo_name:
-        print("ERROR: GitHub repo name not found in JSON. Cannot rename remote.")
-        return False
+        print(f"  - GitHub repo name for '{old_name}' not found in JSON. Assuming no repo exists.")
+        del courses_data[course_id]
+        gcm.save_courses_to_json(courses_data)
+        print(f"  ✓ Removed course '{old_name}' from courses.json.")
+        return True # Treat as a "successful" operation
 
     # Sanitize names for paths and repo
     sanitized_new_name = "".join([c for c in new_name if c.isalnum() or c in '-']).replace(' ', '-').strip()
     old_path = Path(CONFIG['output_dir']) / "".join([c for c in old_name if c.isalnum() or c in ' -']).strip()
     new_path = Path(CONFIG['output_dir']) / "".join([c for c in new_name if c.isalnum() or c in ' -']).strip()
-
-    if not old_path.exists():
-        print(f"ERROR: Local folder '{old_path}' does not exist.")
-        return False
-
+    
     original_cwd = Path.cwd()
+    
     try:
-        # 1️⃣ Rename local folder
-        if old_path != new_path:
-            old_path.rename(new_path)
-            print(f"  ✓ Local folder renamed to '{new_path.name}'")
+        # Part 1: Handle local directory path for running gh command
+        run_dir = None
+        if old_path.exists():
+            if old_path != new_path:
+                old_path.rename(new_path)
+                print(f"  ✓ Local folder renamed to '{new_path.name}'")
+            run_dir = new_path
+        else:
+            print(f"  - Local folder '{old_path}' does not exist. Skipping local rename.")
+            run_dir = Path(CONFIG['output_dir'])
+        
+        os.chdir(run_dir)
 
-        # 2️⃣ Rename GitHub repository
-        os.chdir(new_path)
+        # Part 2: Handle GitHub repo rename
         try:
+            github_username = _get_github_username()
+            if not github_username:
+                print("  ✗ Cannot rename remote GitHub repo without username.")
+                return False
+
+            full_old_repo_path = f"{github_username}/{old_repo_name}"
+
             subprocess.run(
-                ['gh', 'repo', 'rename', sanitized_new_name, '--yes'],
+                ['gh', 'repo', 'rename', sanitized_new_name, '--repo', full_old_repo_path, '--yes'],
                 check=True, capture_output=True, text=True
             )
-            print(f"  ✓ GitHub repo renamed: {old_repo_name} -> {sanitized_new_name}")
+            print(f"  ✓ GitHub repo renamed: {full_old_repo_path} -> {sanitized_new_name}")
 
             # Update JSON
             courses_data[course_id]['full_name'] = new_name
@@ -373,8 +432,17 @@ def rename_course_repo(old_name: str, new_name: str, course_id: str):
 
             return True
         except subprocess.CalledProcessError as e:
-            print(f"✗ Failed to rename GitHub repo: {e.stderr.strip()}")
-            return False
+            stderr = e.stderr.strip()
+            if "404" in stderr or "Not Found" in stderr:
+                print(f"  - GitHub repo {github_username}/{old_repo_name} not found. Assuming deleted.")
+                # Remove the course from courses.json
+                del courses_data[course_id]
+                gcm.save_courses_to_json(courses_data)
+                print(f"  ✓ Removed course '{old_name}' from courses.json.")
+                return True # Treat as a "successful" operation
+            else:
+                print(f"✗ Failed to rename GitHub repo: {stderr}")
+                return False
     finally:
         os.chdir(original_cwd)
 
@@ -385,16 +453,16 @@ def create_git_repo(course_dir: Path, course: dict):
     """
     course_name = course['full_name']
     print(f"\n--- Setting up Git repository for {course_name} ---")
-    
+
     if not course_dir.is_dir():
         print(f"ERROR: Course directory '{course_dir}' not found.")
-        return
+        return False
 
     original_cwd = Path.cwd()
-    
+
     # 2️⃣ Sanitize GitHub repo name (do this BEFORE changing directory)
     sanitized_repo_name = "".join([c for c in course_name if c.isalnum() or c in '-']).replace(' ', '-').strip()
-    
+
     try:
         # 1️⃣ Initialize git repo if it doesn't exist
         os.chdir(course_dir)
@@ -416,14 +484,17 @@ def create_git_repo(course_dir: Path, course: dict):
         remotes = subprocess.run(['git', 'remote'], capture_output=True, text=True).stdout.split()
         if 'origin' not in remotes:
             try:
+                # Determine visibility flag from CONFIG
+                visibility_flag = '--private' if CONFIG.get('DEFAULT_REPO_PRIVATE', True) else '--public'
+                
                 subprocess.run(
-                    ['gh', 'repo', 'create', sanitized_repo_name, '--public', '--source=.', '--remote=origin'],
+                    ['gh', 'repo', 'create', sanitized_repo_name, visibility_flag, '--source=.', '--remote=origin'],
                     check=True, capture_output=True, text=True
                 )
-                print(f"  ✓ GitHub repo created: {sanitized_repo_name}")
+                print(f"  ✓ GitHub repo created: {sanitized_repo_name} ({visibility_flag.strip('--')})")
             except subprocess.CalledProcessError as e:
                 print(f"  ✗ Failed to create GitHub repo: {e.stderr.strip()}")
-                return
+                return False
         else:
             print("  Remote 'origin' already exists. Skipping creation.")
 
@@ -431,7 +502,9 @@ def create_git_repo(course_dir: Path, course: dict):
         subprocess.run(['git', 'branch', '-M', 'main'], check=True, capture_output=True)
         subprocess.run(['git', 'push', '-u', 'origin', 'main', '--force'], check=True, capture_output=True)
         print(f"  ✓ Successfully pushed to GitHub: {sanitized_repo_name}")
-
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"  ✗ An error occurred during git operations: {e}")
+        return False
     finally:
         # IMPORTANT: Change back to original directory BEFORE updating JSON
         os.chdir(original_cwd)
@@ -439,18 +512,19 @@ def create_git_repo(course_dir: Path, course: dict):
     # 5️⃣ Store GitHub repo name in JSON (OUTSIDE the try/finally block, after chdir back)
     courses_data = gcm.load_courses_from_json()
     course_id = course['url']
-    
+
     # Ensure there is an entry for this course in the JSON
     if course_id not in courses_data:
         raise ValueError(
             f"Course ID '{course_id}' not found in courses.json! "
             f"Please run --update-courses first to populate the courses database."
-        ) 
-    
+        )
+
     courses_data[course_id]['github_repo'] = sanitized_repo_name
 
     gcm.save_courses_to_json(courses_data)
     print(f"  ✓ Stored GitHub repo name in courses.json under ID '{course_id}'")
+    return True
 
 
 def interactive_workflow(page: Page):
@@ -476,16 +550,15 @@ def interactive_workflow(page: Page):
             course_id = course['url']  # Use the Gradescope course URL as the unique ID
             download_course(page, course, course_id, CONFIG['output_dir'])
             
-            # Ask if user wants to create Git repo
-            if input("Create and push Git repository? (y/n): ").strip().lower() == 'y':
-                sanitized_name = "".join(c if c.isalnum() or c in ' -' else '-' for c in course['full_name']).strip()
-                repo_dir = Path(CONFIG['output_dir']) / sanitized_name
-                success = create_git_repo(repo_dir, course) 
-                
-                # Only offer delete if push succeeded
-                if success and input("Delete local folder after push? (y/n): ").strip().lower() == 'y':
-                    shutil.rmtree(repo_dir)
-                    print("Local directory deleted safely.")
+            # Create and push Git repository
+            sanitized_name = "".join(c if c.isalnum() or c in ' -' else '-' for c in course['full_name']).strip()
+            repo_dir = Path(CONFIG['output_dir']) / sanitized_name
+            success = create_git_repo(repo_dir, course)
+
+            # Only offer delete if push succeeded
+            if success:
+                shutil.rmtree(repo_dir)
+                print("Local directory deleted safely.")
         
         except (ValueError, IndexError):
             print("Invalid input. Please enter a valid number.")
