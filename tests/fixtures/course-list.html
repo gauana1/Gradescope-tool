@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <!-- Valid course cards (ported from real Gradescope markup, PII removed) -->
+  <a class="courseBox" href="/courses/111111">
+    <div class="courseBox--shortname">CS 101</div>
+    <div class="courseBox--name">Introduction to Programming</div>
+    <div class="courseBox--term">Fall 2024</div>
+  </a>
+
+  <a class="courseBox" href="/courses/222222">
+    <div class="courseBox--shortname">MATH 201</div>
+    <div class="courseBox--name">Linear Algebra</div>
+    <div class="courseBox--term">Spring 2025</div>
+  </a>
+
+  <!-- Duplicate — should be deduped -->
+  <a class="courseBox" href="/courses/111111">
+    <div class="courseBox--shortname">CS 101</div>
+    <div class="courseBox--name">Introduction to Programming</div>
+    <div class="courseBox--term">Fall 2024</div>
+  </a>
+
+  <!-- Should be skipped: href contains /assignments/ -->
+  <a class="courseBox" href="/courses/333333/assignments/999">
+    <div class="courseBox--name">Bad Link</div>
+  </a>
+
+  <!-- Should be skipped: no href -->
+  <a class="courseBox">
+    <div class="courseBox--name">No Href</div>
+  </a>
+</body>
+</html>

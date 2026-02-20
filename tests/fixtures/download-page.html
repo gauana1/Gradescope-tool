@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <!-- Matched by download_submission href -->
+  <a href="/submissions/999/download_submission">Download Submission</a>
+
+  <!-- Matched by [download] attr -->
+  <a href="/files/notes.pdf" download="notes.pdf">Notes PDF</a>
+
+  <!-- Matched by extension -->
+  <a href="/files/solution.py">solution.py</a>
+  <a href="/files/archive.zip">Download Zip</a>
+
+  <!-- Matched by "Download Graded Copy" text (case-insensitive) -->
+  <a href="/courses/111111/assignments/100/submissions/88/download_graded_copy">download graded copy</a>
+
+  <!-- Duplicate — should be deduped -->
+  <a href="/submissions/999/download_submission">Download Submission Again</a>
+
+  <!-- No href — should be skipped -->
+  <a>Nothing</a>
+</body>
+</html>

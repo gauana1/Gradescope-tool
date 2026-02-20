@@ -1,0 +1,13 @@
+{
+  "name": "gradescope-archiver-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension to archive Gradescope courses to GitHub",
+  "scripts": {
+    "test": "jest --testPathPattern=tests/"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jsdom": "^24.1.0"
+  }
+}

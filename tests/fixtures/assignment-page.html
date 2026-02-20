@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <table>
+    <tbody>
+      <!-- Graded by text -->
+      <tr>
+        <td><a href="/courses/111111/assignments/100">Homework 1</a></td>
+        <td>Graded</td>
+      </tr>
+
+      <!-- Graded by score -->
+      <tr>
+        <td><a href="/courses/111111/assignments/101">Project 1</a></td>
+        <td>85.5 / 100</td>
+      </tr>
+
+      <!-- Not graded — should be skipped -->
+      <tr>
+        <td><a href="/courses/111111/assignments/102">Homework 2</a></td>
+        <td>Submitted</td>
+      </tr>
+
+      <!-- No assignment link — should be skipped -->
+      <tr>
+        <td>No link here</td>
+        <td>Graded</td>
+      </tr>
+
+      <!-- Duplicate URL — should be deduped -->
+      <tr>
+        <td><a href="/courses/111111/assignments/100">Homework 1 (dup)</a></td>
+        <td>Graded</td>
+      </tr>
+    </tbody>
+  </table>
+</body>
+</html>
