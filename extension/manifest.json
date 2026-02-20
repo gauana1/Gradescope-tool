@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Gradescope Archiver",
+  "version": "0.1.0",
+  "description": "Scrapes Gradescope, uploads to GitHub.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://*.gradescope.com/*",
+    "https://api.github.com/*"
+  ],
+  "permissions": [
+    "storage",
+    "identity",
+    "scripting",
+    "alarms"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.gradescope.com/*"], 
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["https://*.gradescope.com/*"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}
