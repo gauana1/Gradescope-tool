@@ -1,7 +1,7 @@
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
 const path = require('path');
-const { parseCourseList, parseAssignments, parseFileLinks, normalizeHref, safeText, normalizeCourses } = require('../extension/scraper');
+const { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, normalizeHref, safeText } = require('../extension/scraper');
 
 function loadFixture(name) {
   const html = fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -163,8 +163,9 @@ describe('normalizeCourses', () => {
     expect(result[0]).toEqual({
       course_id: '12345',
       full_name: 'Intro to CS',
+      short_name: '',
       rename: 'intro-to-cs',
-      github_repo: 'gradescope-intro-to-cs',
+      github_repo: 'gradescope-12345-intro-to-cs',
       last_synced: null,
       status: 'idle',
       url: 'https://www.gradescope.com/courses/12345',
@@ -208,5 +209,87 @@ describe('normalizeCourses', () => {
     const input = [{ url: 'https://www.gradescope.com/courses/123', full_name: '  CS 101  ' }];
     const result = normalizeCourses(input);
     expect(result[0].full_name).toBe('CS 101');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseCourseList — h3 primary path (uses tests/fixtures/h3-course-list.html)
+// ---------------------------------------------------------------------------
+describe('parseCourseList (h3 primary path)', () => {
+  let doc;
+  beforeAll(() => { doc = loadFixture('h3-course-list.html'); });
+
+  test('returns exactly 2 unique courses via h3.courseBox--shortname', () => {
+    const courses = parseCourseList(doc);
+    expect(courses).toHaveLength(2);
+  });
+
+  test('first course has correct short_name and full_name', () => {
+    const courses = parseCourseList(doc);
+    expect(courses[0].short_name).toBe('EC ENGR M116C');
+    expect(courses[0].full_name).toBe('Principles of Electrical Engineering');
+    expect(courses[0].term).toBe('Winter 2026');
+    expect(courses[0].url).toBe('https://www.gradescope.com/courses/555555');
+  });
+
+  test('deduplicates cards with the same URL', () => {
+    const courses = parseCourseList(doc);
+    const urls = courses.map(c => c.url);
+    expect(new Set(urls).size).toBe(urls.length);
+  });
+
+  test('skips cards whose href contains /assignments/', () => {
+    const courses = parseCourseList(doc);
+    expect(courses.every(c => !c.url.includes('/assignments/'))).toBe(true);
+  });
+
+  test('skips cards with no href', () => {
+    const courses = parseCourseList(doc);
+    expect(courses.every(c => !!c.url)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cleanShortName — tested indirectly via normalizeCourses
+// ---------------------------------------------------------------------------
+describe('cleanShortName (via normalizeCourses short_name)', () => {
+  function clean(raw) {
+    return normalizeCourses([{ url: 'https://www.gradescope.com/courses/1', full_name: '', short_name: raw }])[0].short_name;
+  }
+
+  test('strips semester prefix like 26W-', () => {
+    expect(clean('26W-COM SCI-M148')).toBe('COM SCI M148');
+  });
+
+  test('strips semester prefix like 25F-', () => {
+    expect(clean('25F-COM SCI-M151B')).toBe('COM SCI M151B');
+  });
+
+  test('strips section suffix like -LEC-1', () => {
+    expect(clean('COM SCI-LEC-1')).toBe('COM SCI');
+  });
+
+  test('strips section suffix like -LAB-3', () => {
+    expect(clean('EC ENGR-LAB-3')).toBe('EC ENGR');
+  });
+
+  test('strips semester word like Winter 2026', () => {
+    expect(clean('ECE C147A/C247A Winter 2026')).toBe('ECE C147A/C247A');
+  });
+
+  test('strips semester word like Fall 2024', () => {
+    expect(clean('PHYSICS 4AL Fall 2024')).toBe('PHYSICS 4AL');
+  });
+
+  test('converts remaining hyphens to spaces', () => {
+    expect(clean('PHYSICS-4AL')).toBe('PHYSICS 4AL');
+  });
+
+  test('leaves already-clean names unchanged', () => {
+    expect(clean('COM SCI 131')).toBe('COM SCI 131');
+  });
+
+  test('returns undefined/null passthrough', () => {
+    expect(clean('')).toBe('');
   });
 });

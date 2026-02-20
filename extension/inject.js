@@ -1,13 +1,14 @@
 // inject.js
 // Runs in the page MAIN world. Exposes `window.gradescopeArchiver` with Promise APIs
 // that forward requests to the extension content script via postMessage.
+console.log('inject.js loaded');
 (function () {
   if (window.gradescopeArchiver) return;
 
   const pending = new Map();
 
   window.addEventListener('message', (e) => {
-    if (e.source !== window || !e.data || e.data.source !== 'gradescope-archiver-page') return;
+    if (e.source !== window || !e.data || (e.data.source !== 'gradescope-archiver-page' && e.data.source !== 'gradescope-archiver-inject')) return;
     const { type, requestId, payload, error } = e.data;
     if (!requestId) return;
     const entry = pending.get(requestId);
@@ -40,7 +41,4 @@
       return makeRequest('RUN_PARSE_COURSE_LIST');
     }
   };
-
-  // friendly alias
-  window.gradescopePageHelper = window.gradescopeArchiver;
 })();

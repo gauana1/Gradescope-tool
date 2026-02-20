@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <!-- Uses Gradescope's newer h3.courseBox--shortname markup — exercises the PRIMARY parse path -->
+
+  <a class="coursebox" href="/courses/555555">
+    <h3 class="courseBox--shortname">EC ENGR M116C</h3>
+    <div class="courseBox--name">Principles of Electrical Engineering</div>
+    <div class="courseBox--term">Winter 2026</div>
+  </a>
+
+  <a class="coursebox" href="/courses/666666">
+    <h3 class="courseBox--shortname">COM SCI 131</h3>
+    <div class="courseBox--name">Programming Languages</div>
+    <div class="courseBox--term">Fall 2025</div>
+  </a>
+
+  <!-- Duplicate — should be deduped -->
+  <a class="coursebox" href="/courses/555555">
+    <h3 class="courseBox--shortname">EC ENGR M116C</h3>
+    <div class="courseBox--name">Principles of Electrical Engineering</div>
+    <div class="courseBox--term">Winter 2026</div>
+  </a>
+
+  <!-- Should be skipped: href has /assignments/ -->
+  <a class="coursebox" href="/courses/777777/assignments/42">
+    <h3 class="courseBox--shortname">BAD LINK</h3>
+  </a>
+
+  <!-- Should be skipped: no href -->
+  <a class="coursebox">
+    <h3 class="courseBox--shortname">NO HREF</h3>
+  </a>
+</body>
+</html>

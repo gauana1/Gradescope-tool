@@ -1,11 +1,132 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>Gradescope Archiver</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-width: 320px;
+      max-width: 380px;
+      padding: 14px 16px 12px;
+      margin: 0;
+      color: #202124;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    h2 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: 0.01em;
+    }
+    .options-link {
+      font-size: 11px;
+      color: #1a73e8;
+      text-decoration: none;
+    }
+    .options-link:hover { text-decoration: underline; }
+    #course-list {
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 4px;
+      margin-bottom: 10px;
+      background: #fafafa;
+    }
+    .course-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .course-item:hover { background: #eef2ff; }
+    .course-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      cursor: pointer;
+      user-select: none;
+      min-width: 0;
+    }
+    .course-label input[type="checkbox"] { flex-shrink: 0; accent-color: #1a73e8; }
+    .course-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .course-status { font-size: 11px; white-space: nowrap; }
+    .course-status a { color: #1a73e8; text-decoration: none; }
+    .course-status a:hover { text-decoration: underline; }
+    .status-done { color: #1e8c3a; }
+    .status-uploading { color: #e65100; }
+    .status-error { color: #c0392b; }
+    .status-idle { color: transparent; }
+    .repo-link { font-size: 11px; color: #1a73e8; text-decoration: none; margin-left: 8px; }
+    .repo-link:hover { text-decoration: underline; }
+    .empty {
+      color: #9aa0a6;
+      font-size: 12px;
+      text-align: center;
+      padding: 20px 0;
+      margin: 0;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    #refresh-btn {
+      flex: 1;
+      padding: 7px 0;
+      background: #fff;
+      color: #444;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #refresh-btn:hover { background: #f1f3f4; }
+    #refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #upload-btn {
+      flex: 2;
+      padding: 7px 0;
+      background: #1a73e8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    #upload-btn:hover { background: #1558b0; }
+    #upload-btn:disabled { background: #b0b0b0; cursor: not-allowed; }
+    #global-status {
+      font-size: 11px;
+      min-height: 14px;
+      text-align: center;
+    }
+    .global-status.status-error { color: #c0392b; }
+    .global-status.status-ok { color: #1e8c3a; }
+    .global-status.status-info { color: #555; }
+  </style>
   <script src="popup.js" defer></script>
 </head>
 <body>
+  <header>
+    <h2>Gradescope Archiver</h2>
+    <a class="options-link" href="options.html" target="_blank">⚙ Options</a>
+  </header>
   <div id="course-list"></div>
-  <button id="upload-btn">Upload Selected</button>
+  <div class="actions">
+    <button id="refresh-btn">Refresh</button>
+    <button id="upload-btn">Upload to GitHub</button>
+  </div>
+  <div id="global-status" class="global-status"></div>
 </body>
 </html>

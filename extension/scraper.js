@@ -1,11 +1,5 @@
 // scraper.js
 // Pure DOM→JSON module. No network, no chrome.*, no DOM mutation.
-// Ported from gradescope_lib.py:
-//   parseCourseList  ← get_courses()
-//   parseAssignments ← download_course()
-//   parseFileLinks   ← _try_direct_downloads()
-
-console.log('scraper.js loaded');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -56,8 +50,19 @@ function parseCourseList(root) {
   const seen = new Set();
   const courses = [];
 
-  const cards = root.querySelectorAll('a.courseBox');
-  for (const card of cards) {
+  // Try new structure first: h3.courseBox--shortname inside a.coursebox
+  const nameEls = root.querySelectorAll('h3.courseBox--shortname');
+  for (const nameEl of nameEls) {
+    const short_name = safeText(nameEl) || '';
+    if (!short_name) continue;
+
+    // Find the associated link
+    let card = nameEl.closest('a.coursebox');
+    if (!card) {
+      card = nameEl.closest('a');
+    }
+    if (!card) continue;
+
     const href = card.getAttribute('href');
     if (!href || !href.includes('/courses/')) continue;
     if (href.includes('/assignments/') || href.includes('/submissions/')) continue;
@@ -66,14 +71,31 @@ function parseCourseList(root) {
     if (seen.has(url)) continue;
     seen.add(url);
 
-    // Parse the concatenated text: e.g., "CS 101\n    Introduction to Programming\n    Fall 2024\n3 assignments"
-    const text = safeText(card);
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.match(/\d+ assignments?$/));
-    const short_name = lines[0] || '';
-    const full_name = lines[1] || '';
-    const term = lines[2] || '';
-
+    const full_name = safeText(card.querySelector('.courseBox--name')) || '';
+    const term = safeText(card.querySelector('.courseBox--term')) || '';
     courses.push({ url, full_name, short_name, term });
+  }
+
+  // Fallback: old selector if no h3 found
+  if (courses.length === 0) {
+    const cards = root.querySelectorAll('a[href*="/courses/"]');
+    for (const card of cards) {
+      const href = card.getAttribute('href');
+      if (!href || !href.includes('/courses/')) continue;
+      if (href.includes('/assignments/') || href.includes('/submissions/')) continue;
+
+      const url = normalizeHref(href, BASE);
+      if (seen.has(url)) continue;
+      seen.add(url);
+
+      // Fallback parsing
+      const text = safeText(card);
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.match(/\d+ assignments?$/));
+      const short_name = lines[0] || '';
+      if (!short_name) continue;
+
+      courses.push({ url, full_name: lines[1] || '', short_name, term: lines[2] || '' });
+    }
   }
 
   return courses;
@@ -92,6 +114,21 @@ function normalizeCourses(parsedCourses) {
       .slice(0, 40);
   }
 
+  function cleanShortName(s) {
+    if (!s) return s;
+    // Remove semester prefixes like 26W-, 25F-, 24S-, etc.
+    s = s.replace(/^\d{2}[A-Z]-/g, '');
+    // Remove section suffixes like -LEC-1, -LAB-4, -LEC_2, etc.
+    s = s.replace(/-(LEC|LAB|DIS|SEM|LEC_)[\d-]+/gi, '');
+    // Remove semester words like Winter 2026, Fall 2024, etc.
+    s = s.replace(/\s+(Winter|Fall|Spring|Summer)\s+\d{4}/gi, '');
+    // Replace - with space
+    s = s.replace(/-/g, ' ');
+    // Remove extra spaces and trim
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+  }
+
   return (parsedCourses || []).map((c) => {
     const url = c.url || '';
     let course_id = '';
@@ -99,12 +136,14 @@ function normalizeCourses(parsedCourses) {
     course_id = match ? match[1] : '';
 
     const full_name = (c.full_name || '').trim();
-    const rename = slugify(full_name) || (course_id ? `course-${course_id}` : 'course');
-    const github_repo = `gradescope-${rename}`;
+    const cleanedShort = cleanShortName(c.short_name);
+    const rename = slugify(cleanedShort || full_name) || (course_id ? `course-${course_id}` : 'course');
+    const github_repo = course_id ? `gradescope-${course_id}-${rename}` : `gradescope-${rename}`;
 
     return {
       course_id,
       full_name,
+      short_name: cleanedShort,
       rename,
       github_repo,
       last_synced: null,
@@ -234,10 +273,6 @@ function parseFileLinks(root, baseUrl = 'https://www.gradescope.com') {
   return links;
 }
 
-// ---------------------------------------------------------------------------
-// Attach to window for use by content-script.js without a bundler
-// ---------------------------------------------------------------------------
-
 if (typeof window !== 'undefined') {
   window.gradescopeScraper = { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses };
   console.log('gradescopeScraper attached:', !!window.gradescopeScraper);
@@ -245,5 +280,5 @@ if (typeof window !== 'undefined') {
 
 // Also export for Jest / Node environments
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseCourseList, parseAssignments, parseFileLinks, normalizeHref, safeText, normalizeCourses };
+  module.exports = { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, normalizeHref, safeText };
 }

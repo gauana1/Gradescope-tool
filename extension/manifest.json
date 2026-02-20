@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "Scrapes Gradescope, uploads to GitHub.",
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "host_permissions": [
     "https://*.gradescope.com/*",
