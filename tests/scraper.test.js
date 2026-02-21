@@ -164,8 +164,8 @@ describe('normalizeCourses', () => {
       course_id: '12345',
       full_name: 'Intro to CS',
       short_name: '',
-      rename: 'intro-to-cs',
-      github_repo: 'gradescope-12345-intro-to-cs',
+      rename: 'INTRO-TO-CS',
+      github_repo: 'gradescope-INTRO-TO-CS',
       last_synced: null,
       status: 'idle',
       url: 'https://www.gradescope.com/courses/12345',
@@ -184,7 +184,7 @@ describe('normalizeCourses', () => {
   test('slugifies full_name for rename', () => {
     const input = [{ url: 'https://www.gradescope.com/courses/123', full_name: 'Advanced Topics in AI & ML!' }];
     const result = normalizeCourses(input);
-    expect(result[0].rename).toBe('advanced-topics-in-ai-ml');
+    expect(result[0].rename).toBe('ADVANCED-TOPICS-IN-AI-ML');
   });
   test('limits rename to 40 chars', () => {
     const longName = 'A'.repeat(50);
@@ -195,7 +195,7 @@ describe('normalizeCourses', () => {
   test('uses course-id fallback for rename if full_name is empty', () => {
     const input = [{ url: 'https://www.gradescope.com/courses/999', full_name: '' }];
     const result = normalizeCourses(input);
-    expect(result[0].rename).toBe('course-999');
+    expect(result[0].rename).toBe('COURSE-999');
   });
   test('handles empty input array', () => {
     const result = normalizeCourses([]);

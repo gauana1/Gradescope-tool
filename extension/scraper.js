@@ -108,8 +108,7 @@ function parseCourseList(root) {
 function normalizeCourses(parsedCourses) {
   function slugify(s) {
     return (s || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .slice(0, 40);
   }
@@ -126,6 +125,8 @@ function normalizeCourses(parsedCourses) {
     s = s.replace(/-/g, ' ');
     // Remove extra spaces and trim
     s = s.replace(/\s+/g, ' ').trim();
+    // Uppercase to match popup display
+    s = s.toUpperCase();
     return s;
   }
 
@@ -136,9 +137,12 @@ function normalizeCourses(parsedCourses) {
     course_id = match ? match[1] : '';
 
     const full_name = (c.full_name || '').trim();
-    const cleanedShort = cleanShortName(c.short_name);
-    const rename = slugify(cleanedShort || full_name) || (course_id ? `course-${course_id}` : 'course');
-    const github_repo = course_id ? `gradescope-${course_id}-${rename}` : `gradescope-${rename}`;
+    const cleanedShort = cleanShortName(c.short_name || '').replace(new RegExp(`^${course_id}\\s*`), '').trim();
+    let rename = cleanedShort.replace(/[\s/]+/g, '-') || slugify(full_name) || (course_id ? `course-${course_id}` : 'course');
+    // Ensure uppercase to match popup casing
+    rename = rename.toUpperCase();
+    // Prefix with gradescope- so repo names are clearly identifiable
+    const github_repo = `gradescope-${rename}`;
 
     return {
       course_id,

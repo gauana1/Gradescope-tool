@@ -86,11 +86,18 @@ export async function createCommit(token, owner, repo, message, treeSha, parentS
   return res.json();
 }
 
-export async function updateRef(token, owner, repo, ref, sha) {
-  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/git/refs/heads/${ref}`, {
-    method: 'PATCH',
+export async function updateRef(token, owner, repo, branch, sha, parentSha) {
+  const exists = parentSha !== null && parentSha !== undefined;
+  const method = exists ? 'PATCH' : 'POST';
+  // force:true on PATCH so re-archiving the same course never 422s
+  const body = exists ? { sha, force: true } : { ref: `refs/heads/${branch}`, sha };
+  const url = exists
+    ? `${GITHUB_API}/repos/${owner}/${repo}/git/refs/heads/${branch}`
+    : `${GITHUB_API}/repos/${owner}/${repo}/git/refs`;
+  const res = await fetch(url, {
+    method,
     headers: ghHeaders(token),
-    body: JSON.stringify({ sha, force: false }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`updateRef failed: ${res.status} ${await res.text()}`);
   return res.json();

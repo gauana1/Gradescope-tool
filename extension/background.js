@@ -101,42 +101,48 @@ async function handleUpload(course_ids) {
 
 async function uploadCourse(token, owner, course) {
   const { course_id, full_name, github_repo: repoName } = course;
-  // Prefer an existing repo name if we've stored a mapping for this course_id
-  const { repoMap = {} } = await chrome.storage.local.get('repoMap');
-  const preferredName = repoMap && repoMap[course_id] && repoMap[course_id].name ? repoMap[course_id].name : repoName;
+  // Always use the current repo name from the course — never override from stale storage
 
   broadcast({ type: 'UPLOAD_PROGRESS', payload: { course_id, step: 'Creating repository', pct: 10 } });
-  const repo = await createRepo(token, preferredName, { isPrivate: true });
+  const repo = await createRepo(token, repoName, { isPrivate: true });
+  // Use the actual name returned by GitHub for subsequent operations
+  const actualRepoName = repo.name || repoName;
   const branch = repo.default_branch || 'main';
 
   broadcast({ type: 'UPLOAD_PROGRESS', payload: { course_id, step: 'Fetching branch info', pct: 30 } });
-  const parentSha = await getDefaultBranchSha(token, owner, repoName, branch).catch(() => null);
-  const baseTreeSha = parentSha
-    ? await getCommitTreeSha(token, owner, repoName, parentSha).catch(() => null)
-    : null;
+  let parentSha = null;
+  let baseTreeSha = null;
+  try {
+    parentSha = await getDefaultBranchSha(token, owner, actualRepoName, branch);
+    baseTreeSha = await getCommitTreeSha(token, owner, actualRepoName, parentSha);
+  } catch (_) {
+    // None — repo may be fresh with no commits yet
+    parentSha = null;
+    baseTreeSha = null;
+  }
 
   broadcast({ type: 'UPLOAD_PROGRESS', payload: { course_id, step: 'Creating files', pct: 50 } });
   const readmeText = `# ${full_name}\n\nArchived from Gradescope.\n\nCourse ID: ${course_id}\nArchived at: ${new Date().toISOString()}\n`;
   const readmeB64 = btoa(unescape(encodeURIComponent(readmeText)));
-  const blob = await createBlob(token, owner, repoName, readmeB64, 'base64');
+  const blob = await createBlob(token, owner, actualRepoName, readmeB64, 'base64');
 
   broadcast({ type: 'UPLOAD_PROGRESS', payload: { course_id, step: 'Committing', pct: 75 } });
   const tree = await createTree(
-    token, owner, repoName,
+    token, owner, actualRepoName,
     [{ path: 'README.md', mode: '100644', type: 'blob', sha: blob.sha }],
     baseTreeSha
   );
   const commit = await createCommit(
-    token, owner, repoName,
+    token, owner, actualRepoName,
     `Archive ${full_name}`,
     tree.sha,
     parentSha ? [parentSha] : []
   );
-  await updateRef(token, owner, repoName, branch, commit.sha);
+  await updateRef(token, owner, actualRepoName, branch, commit.sha, parentSha);
 
   broadcast({
     type: 'UPLOAD_DONE',
-    payload: { course_id, repoUrl: `https://github.com/${owner}/${repoName}`, sha: commit.sha },
+    payload: { course_id, repoUrl: repo.html_url || `https://github.com/${owner}/${actualRepoName}`, sha: commit.sha },
   });
 
   // Persist status update

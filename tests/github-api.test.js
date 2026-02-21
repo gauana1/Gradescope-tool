@@ -193,23 +193,33 @@ describe('createCommit', () => {
 describe('updateRef', () => {
   test('updates branch ref and returns result', async () => {
     mockFetch(200, { ref: 'refs/heads/main', object: { sha: 'commitsha001' } });
-    const result = await updateRef(TOKEN, OWNER, REPO, 'main', 'commitsha001');
+    const result = await updateRef(TOKEN, OWNER, REPO, 'main', 'commitsha001', 'parentsha');
     expect(result.ref).toBe('refs/heads/main');
     const body = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(body.sha).toBe('commitsha001');
-    expect(body.force).toBe(false);
+    expect(body.force).toBe(true);
   });
 
   test('calls the correct URL for the branch', async () => {
     mockFetch(200, { ref: 'refs/heads/main' });
-    await updateRef(TOKEN, OWNER, REPO, 'main', 'sha');
+    await updateRef(TOKEN, OWNER, REPO, 'main', 'sha', 'parentsha');
     const url = global.fetch.mock.calls[0][0];
     expect(url).toContain(`/repos/${OWNER}/${REPO}/git/refs/heads/main`);
   });
 
+  test('creates new branch ref when parentSha is null', async () => {
+    mockFetch(200, { ref: 'refs/heads/main' });
+    await updateRef(TOKEN, OWNER, REPO, 'main', 'sha', null);
+    const url = global.fetch.mock.calls[0][0];
+    expect(url).toContain(`/repos/${OWNER}/${REPO}/git/refs`);
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.ref).toBe('refs/heads/main');
+    expect(body.sha).toBe('sha');
+  });
+
   test('throws on failure', async () => {
     mockFetch(422, {});
-    await expect(updateRef(TOKEN, OWNER, REPO, 'main', 'bad')).rejects.toThrow('updateRef failed: 422');
+    await expect(updateRef(TOKEN, OWNER, REPO, 'main', 'bad', 'parentsha')).rejects.toThrow('updateRef failed: 422');
   });
 });
 
