@@ -15,12 +15,13 @@
     "storage",
     "identity",
     "scripting",
-    "alarms"
+    "alarms",
+    "tabs"
   ],
   "content_scripts": [
     {
       "matches": ["https://*.gradescope.com/*"], 
-      "js": ["scraper.js", "content-script.js"],
+      "js": ["content-script.js"],
       "run_at": "document_idle"
     }
   ],

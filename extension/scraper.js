@@ -1,6 +1,11 @@
 // scraper.js
 // Pure DOM→JSON module. No network, no chrome.*, no DOM mutation.
 
+if (!(typeof window !== 'undefined' && window.__gradescopeArchiverScraperLoaded)) {
+if (typeof window !== 'undefined') {
+  window.__gradescopeArchiverScraperLoaded = true;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -194,8 +199,9 @@ function parseAssignments(root) {
     if (seen.has(url)) continue;
     seen.add(url);
 
+    const name = safeText(linkEl);
     assignments.push({
-      name: safeText(linkEl),
+      name,
       url,
       statusText,
     });
@@ -211,6 +217,7 @@ function parseAssignments(root) {
 
 const FILE_SELECTORS = [
   'a[href*="/download_submission"]',
+  'a[href*="/download"]',
   'a[download]',
   'a[href$=".zip"]',
   'a[href$=".tar.gz"]',
@@ -274,15 +281,140 @@ function parseFileLinks(root, baseUrl = 'https://www.gradescope.com') {
     }
   });
 
+  // PDF viewer wrappers often embed the real PDF via <iframe>, <embed>, or <object>.
+  // Prefer those (they point directly to the .pdf resource used by the viewer).
+  try {
+    const viewerSelectors = ['iframe[src$=".pdf"]', 'embed[src$=".pdf"]', 'object[data$=".pdf"]', 'embed[type="application/pdf"]'];
+    for (const sel of viewerSelectors) {
+      root.querySelectorAll(sel).forEach((el) => {
+        const src = el.getAttribute('src') || el.getAttribute('data') || '';
+        if (src) {
+          // Create a temporary anchor to normalize URL
+          const a = document.createElement('a');
+          a.href = src;
+          const tmp = root.ownerDocument?.createElement('a');
+          const href = normalizeHref(src, baseUrl);
+          if (!seen.has(href)) {
+            seen.add(href);
+            const filenameHint = (href.split('/').filter(Boolean).pop() || '').split('?')[0];
+            links.push({ href, text: safeText(el) || 'pdf-embed', filenameHint });
+          }
+        }
+      });
+    }
+  } catch (_) {
+    // ignore
+  }
+
+  // Heuristic: some pages embed submission JSON or URLs inside <script> tags.
+  // Scan inline scripts for /submissions/<id> references and for nearby
+  // indicators like "graded":true or "pdf_ready":true. Prefer download
+  // endpoints when found (e.g. /submissions/<id>/download).
+  try {
+    root.querySelectorAll('script:not([src])').forEach((s) => {
+      const txt = safeText(s) || '';
+      if (!txt) return;
+      // Find submission URL patterns
+      const re = /(https?:\/\/[^"'\s<>]*\/submissions\/\d+[^"'\s<>]*|\/courses\/\d+\/assignments\/\d+\/submissions\/\d+[^"'\s<>]*|\/submissions\/\d+[^"'\s<>]*)/g;
+      let m;
+      while ((m = re.exec(txt)) !== null) {
+        const rawMatch = m[1];
+        const sidMatch = rawMatch.match(/\/submissions\/(\d+)/);
+        if (!sidMatch) continue;
+        const sid = sidMatch[1];
+        // Look in a small window around the match for graded/pdf flags
+        const ctxStart = Math.max(0, m.index - 200);
+        const ctx = txt.slice(ctxStart, Math.min(txt.length, m.index + 200)).toLowerCase();
+        const isGraded = ctx.includes('\"graded\":true') || ctx.includes('"graded":true') || ctx.includes('pdf_ready') || ctx.includes('pdf_ready":true');
+        if (!isGraded) continue;
+
+        const normalized = normalizeHref(rawMatch, baseUrl);
+        if (!seen.has(normalized)) {
+          seen.add(normalized);
+          // Try to extract a nicer filename from the URL or context
+          let filenameHint = `submission-${sid}.pdf`;
+          try {
+            const urlObj = new URL(normalized);
+            const pathname = urlObj.pathname;
+            const segments = pathname.split('/').filter(Boolean);
+            const lastSegment = segments[segments.length - 1];
+            if (lastSegment && (lastSegment.endsWith('.pdf') || lastSegment.endsWith('.zip'))) {
+              filenameHint = lastSegment;
+            }
+          } catch (_) {
+          }
+          links.push({ href: normalized, text: 'graded-submission', filenameHint });
+        }
+
+        if (!normalized.includes('?download=1')) {
+          const withDownload = `${normalizeHref(`/submissions/${sid}`, baseUrl)}?download=1`;
+          if (!seen.has(withDownload)) {
+            seen.add(withDownload);
+            links.push({ href: withDownload, text: 'graded-submission', filenameHint: `submission-${sid}.pdf` });
+          }
+        }
+      }
+    });
+  } catch (_) {
+    // Ignore script parsing errors
+  }
+
   return links;
 }
 
+/**
+ * Enumerate course file URLs by combining parseAssignments + parseFileLinks.
+ * This helper is pure and expects HTML for assignment pages to be provided.
+ *
+ * @param {Document|Element} courseRoot
+ * @param {(assignmentUrl: string) => string|null|undefined} getAssignmentHtml
+ * @returns {{ assignmentUrl: string, url: string, path: string, filename: string }[]}
+ */
+function enumerateCourseFiles(courseRoot, getAssignmentHtml) {
+  const assignments = parseAssignments(courseRoot);
+  const dedupe = new Set();
+  const files = [];
+  const ownerDoc = courseRoot?.ownerDocument || courseRoot;
+  const domParserCtor = typeof DOMParser !== 'undefined'
+    ? DOMParser
+    : ownerDoc?.defaultView?.DOMParser;
+  if (!domParserCtor) return files;
+
+  assignments.forEach((assignment) => {
+    const assignmentUrl = assignment.url;
+    const html = typeof getAssignmentHtml === 'function' ? getAssignmentHtml(assignmentUrl) : null;
+    if (!html) return;
+
+    const parsed = new domParserCtor().parseFromString(html, 'text/html');
+    const links = parseFileLinks(parsed, assignmentUrl);
+    const assignmentId = assignmentUrl.split('/assignments/')[1]?.split('/')[0] || 'assignment';
+    const assignmentFolder = (assignment.name || assignmentId).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 50);  // Sanitize name for folder
+
+    links.forEach((link) => {
+      const url = link.href;
+      if (!url || dedupe.has(url)) return;
+      dedupe.add(url);
+
+      const safeName = (link.filenameHint || 'file').replace(/[^a-zA-Z0-9._-]+/g, '_');
+      files.push({
+        assignmentUrl,
+        url,
+        filename: safeName,
+        path: `${assignmentFolder}/${safeName}`,
+      });
+    });
+  });
+
+  return files;
+}
+
 if (typeof window !== 'undefined') {
-  window.gradescopeScraper = { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses };
-  console.log('gradescopeScraper attached:', !!window.gradescopeScraper);
+  window.gradescopeScraper = { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, enumerateCourseFiles };
 }
 
 // Also export for Jest / Node environments
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, normalizeHref, safeText };
+  module.exports = { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, normalizeHref, safeText, enumerateCourseFiles };
+}
+
 }

@@ -60,7 +60,26 @@ export async function createBlob(token, owner, repo, content, encoding = 'base64
     headers: ghHeaders(token),
     body: JSON.stringify({ content, encoding }),
   });
-  if (!res.ok) throw new Error(`createBlob failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const responseText = await res.text();
+    const retryAfter = res.headers.get('Retry-After');
+    const lower = (responseText || '').toLowerCase();
+
+    let message = `createBlob failed: ${res.status} ${responseText}`;
+    if (res.status === 413 || lower.includes('too large') || lower.includes('exceeds')) {
+      message = `createBlob failed: ${res.status} Blob rejected by GitHub. Ensure callers skip files >50MB before createBlob.`;
+    }
+
+    const error = new Error(message);
+    error.status = res.status;
+    if (retryAfter) {
+      const retryAfterSeconds = Number(retryAfter);
+      if (Number.isFinite(retryAfterSeconds)) {
+        error.retryAfterSeconds = retryAfterSeconds;
+      }
+    }
+    throw error;
+  }
   return res.json();
 }
 
@@ -89,8 +108,9 @@ export async function createCommit(token, owner, repo, message, treeSha, parentS
 export async function updateRef(token, owner, repo, branch, sha, parentSha) {
   const exists = parentSha !== null && parentSha !== undefined;
   const method = exists ? 'PATCH' : 'POST';
-  // force:true on PATCH so re-archiving the same course never 422s
-  const body = exists ? { sha, force: true } : { ref: `refs/heads/${branch}`, sha };
+  // Use normal fast-forward updates. Force-push can be rejected by repo rules
+  // and causes 422 "Reference cannot be updated".
+  const body = exists ? { sha } : { ref: `refs/heads/${branch}`, sha };
   const url = exists
     ? `${GITHUB_API}/repos/${owner}/${repo}/git/refs/heads/${branch}`
     : `${GITHUB_API}/repos/${owner}/${repo}/git/refs`;

@@ -25,6 +25,9 @@ function makeFetchResponse(status, body) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: {
+      get: () => null,
+    },
     json: () => Promise.resolve(body),
     text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
   };
@@ -126,6 +129,33 @@ describe('createBlob', () => {
     mockFetch(422, { message: 'content not properly encoded' });
     await expect(createBlob(TOKEN, OWNER, REPO, 'bad', 'base64')).rejects.toThrow('createBlob failed: 422');
   });
+
+  test('throws clear error for oversized blobs', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 413,
+      headers: { get: () => null },
+      text: () => Promise.resolve('Payload too large'),
+    });
+
+    await expect(createBlob(TOKEN, OWNER, REPO, 'bad', 'base64')).rejects.toThrow('Ensure callers skip files >50MB');
+  });
+
+  test('attaches retryAfterSeconds on rate limit responses', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: { get: (name) => (name === 'Retry-After' ? '15' : null) },
+      text: () => Promise.resolve('Rate limited'),
+    });
+
+    try {
+      await createBlob(TOKEN, OWNER, REPO, 'data', 'base64');
+      throw new Error('Expected createBlob to throw');
+    } catch (error) {
+      expect(error.retryAfterSeconds).toBe(15);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -197,7 +227,7 @@ describe('updateRef', () => {
     expect(result.ref).toBe('refs/heads/main');
     const body = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(body.sha).toBe('commitsha001');
-    expect(body.force).toBe(true);
+    expect(body.force).toBeUndefined();
   });
 
   test('calls the correct URL for the branch', async () => {

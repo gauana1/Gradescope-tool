@@ -163,7 +163,7 @@ Call `keepAlive()` at the start of `startUpload()` and you're protected for the 
 
 ## Pattern 3: File Size Check Before Downloading
 
-Always check the file size BEFORE attempting a download. GitHub's blob API rejects files over 100MB and it wastes time to download a large file only to fail at the upload step.
+Always check the file size BEFORE attempting a download. This extension enforces a 50MB maximum and marks larger files as skipped.
 
 ```js
 // inject.js — runs in page context
@@ -177,7 +177,7 @@ async function fetchFile(url) {
     // Some servers don't support HEAD — proceed and check after
   }
 
-  const MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+  const MAX_BYTES = 50 * 1024 * 1024; // 50 MB
 
   if (size > MAX_BYTES) {
     window.postMessage({
@@ -300,11 +300,11 @@ background.js:
      
      For each pending file:
        a. window.postMessage → inject.js: fetch this URL
-       b. HEAD check: skip if > 100MB
+      b. HEAD check: skip if > 50MB
        c. fetch() with session cookies
        d. postMessage base64 back → content-script → background
        e. createBlob() via GitHub API
-       f. mark file done in storage
+      f. mark file done in storage
        g. reportProgress() → storage + sendMessage
      
      After all files done:
@@ -312,13 +312,32 @@ background.js:
        i. createCommit(treeSha, "Archive course files")
        j. updateRef("refs/heads/main", commitSha)
        k. mark job complete in storage
-       l. sendMessage UPLOAD_DONE
+      l. sendMessage UPLOAD_DONE
 
 popup.js (open at any point):
   • reads progress from storage on open
   • receives live messages if open during upload
   • shows repo URL when done
 ```
+
+---
+
+## Implemented Resume + Keepalive Behavior
+
+- Background creates and saves `uploadJob` before any download starts.
+- During active file fetch, background opens a keepalive `chrome.runtime.Port` to the Gradescope tab.
+- If keepalive disconnects or a retry is needed, background schedules `chrome.alarms` and resumes from storage.
+- On startup/install, `resumeIfJobPending()` resets interrupted `in_progress` files to `pending` and continues the queue.
+- Progress is written to storage (`progress_<courseId>`) and broadcast as `UPLOAD_PROGRESS` for live popup updates.
+
+## Manual Verification Checklist
+
+1. Open a Gradescope tab while signed in and open the extension popup.
+2. Start upload for a small test course; confirm live percent updates in popup.
+3. Verify GitHub repo is created and commit contains archived files.
+4. Close Gradescope tab during upload; confirm state persists in storage.
+5. Reopen a Gradescope tab or wait for alarm resume; verify upload continues automatically.
+6. Include a file larger than 50MB and verify it is marked `skipped`.
 
 ---
 

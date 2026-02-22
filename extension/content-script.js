@@ -1,56 +1,135 @@
-// content-script.js
+const INJECT_SOURCE = 'gradescope-archiver-inject';
 
-// Listen for postMessage from inject.js (page-context fetcher)
 window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+  const data = event.data;
+  if (!data || data.source !== INJECT_SOURCE) return;
 
-  if (event.data && event.data.source === 'gradescope-archiver-page') {
-    try {
-      if (event.data.type === 'RUN_PARSE_COURSE_LIST') {
-        const hasScraper = !!(window.gradescopeScraper && typeof window.gradescopeScraper.parseCourseList === 'function');
-        const parsed = hasScraper ? window.gradescopeScraper.parseCourseList(document) : null;
-        const normalized = (parsed && window.gradescopeScraper.normalizeCourses)
-          ? window.gradescopeScraper.normalizeCourses(parsed)
-          : null;
+  if (data.type === 'FETCH_RESULT') {
+    chrome.runtime.sendMessage({
+      type: 'FILE_DATA',
+      payload: {
+        filename: data.filename,
+        path: data.path,
+        b64: data.b64,
+        mimeType: data.mimeType,
+        url: data.url,
+      },
+    }).catch(() => {});
+    return;
+  }
 
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage({ type: 'COURSES_FOUND', payload: normalized });
-        }
+  if (data.type === 'FILE_TOO_LARGE') {
+    chrome.runtime.sendMessage({
+      type: 'FILE_TOO_LARGE',
+      payload: {
+        filename: data.filename,
+        path: data.path,
+        url: data.url,
+        sizeBytes: data.sizeBytes,
+      },
+    });
+    return;
+  }
 
-        window.postMessage({
-          source: 'gradescope-archiver-page',
-          type: 'PARSE_RESULT',
-          requestId: event.data.requestId,
-          payload: { parsed, normalized },
-        }, '*');
-      }
-    } catch (err) {
-      console.error('content-script: parse error', err);
-      window.postMessage({
-        source: 'gradescope-archiver-page',
-        type: 'PARSE_ERROR',
-        requestId: event.data.requestId,
-        error: String(err),
-      }, '*');
-    }
+  if (data.type === 'FETCH_PROGRESS') {
+    chrome.runtime.sendMessage({
+      type: 'FETCH_PROGRESS',
+      payload: {
+        path: data.path,
+        url: data.url,
+        pct: data.pct,
+        bytesReceived: data.bytesReceived,
+        totalBytes: data.totalBytes,
+      },
+    });
+    return;
+  }
+
+  if (data.type === 'FETCH_ERROR') {
+    chrome.runtime.sendMessage({
+      type: 'FETCH_ERROR',
+      payload: {
+        path: data.path,
+        url: data.url,
+        error: data.error,
+      },
+    });
   }
 });
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (!message || !message.type) return;
+
+  if (message.type === 'ARCHIVER_DEBUG') {
+    return;
+  }
+
   if (message.type === 'SCRAPE_COURSES') {
-    if (window.gradescopeScraper && window.gradescopeScraper.parseCourseList) {
-      const courses = window.gradescopeScraper.parseCourseList(document);
-      const normalized = window.gradescopeScraper.normalizeCourses
-        ? window.gradescopeScraper.normalizeCourses(courses)
+    const scraper = window.gradescopeScraper;
+    if (!scraper || typeof scraper.parseCourseList !== 'function') {
+      chrome.runtime.sendMessage({ type: 'COURSES_FOUND', payload: [] });
+      return;
+    }
+
+    (async () => {
+      let courses = scraper.parseCourseList(document) || [];
+
+      if (!courses.length) {
+        const fallbackUrls = [
+          `${window.location.origin}/`,
+          `${window.location.origin}/courses`,
+        ];
+
+        for (const url of fallbackUrls) {
+          try {
+            const response = await fetch(url, { credentials: 'include' });
+            if (!response.ok) {
+              continue;
+            }
+            const html = await response.text();
+            const parsed = new DOMParser().parseFromString(html, 'text/html');
+            courses = scraper.parseCourseList(parsed) || [];
+            if (courses.length) break;
+          } catch (_) {
+          }
+        }
+      }
+
+      const normalized = scraper.normalizeCourses
+        ? scraper.normalizeCourses(courses)
         : courses;
       chrome.runtime.sendMessage({ type: 'COURSES_FOUND', payload: normalized });
-    }
+    })();
+    return;
+  }
+
+  if (message.type === 'FETCH_FILE') {
+    const payload = message.payload || {};
+    window.postMessage({
+      source: INJECT_SOURCE,
+      type: 'FETCH_FILE',
+      url: payload.url,
+      path: payload.path,
+      filename: payload.filename,
+      timeoutMs: payload.timeoutMs,
+    }, '*');
   }
 });
 
-// Inject scraper.js and inject.js into the page MAIN world on load
+chrome.runtime.onConnect.addListener((port) => {
+  if (!port || port.name !== 'gradescope-upload-keepalive') return;
+  port.onDisconnect.addListener(() => {
+    chrome.runtime.sendMessage({
+      type: 'KEEPALIVE_DISCONNECTED',
+      payload: { tabId: port.sender?.tab?.id || null },
+    }).catch(() => {
+    });
+  });
+});
+
 chrome.runtime.sendMessage({ type: 'INJECT_INJECT_JS' });
 
-// Auto-populate courses if storage is empty
 chrome.storage.local.get('courses', (data) => {
   if (!data.courses || data.courses.length === 0) {
     chrome.runtime.sendMessage({ type: 'REFRESH_COURSES' });

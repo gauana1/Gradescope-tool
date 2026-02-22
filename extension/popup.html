@@ -93,7 +93,7 @@
     }
     #refresh-btn:hover { background: #f1f3f4; }
     #refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    #upload-btn {
+    #start-btn {
       flex: 2;
       padding: 7px 0;
       background: #1a73e8;
@@ -104,8 +104,44 @@
       font-weight: 500;
       cursor: pointer;
     }
-    #upload-btn:hover { background: #1558b0; }
-    #upload-btn:disabled { background: #b0b0b0; cursor: not-allowed; }
+    #start-btn:hover { background: #1558b0; }
+    #start-btn:disabled { background: #b0b0b0; cursor: not-allowed; }
+    #cancel-btn,
+    #retry-btn {
+      flex: 1;
+      padding: 7px 0;
+      background: #fff;
+      color: #444;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #cancel-btn:hover,
+    #retry-btn:hover { background: #f1f3f4; }
+    #upload-job-status {
+      max-height: 150px;
+      overflow-y: auto;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 6px;
+      margin-bottom: 8px;
+      background: #fafafa;
+      font-size: 11px;
+    }
+    .job-summary { margin-bottom: 6px; color: #555; }
+    .job-file-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 0;
+    }
+    .job-file-path {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
+    }
     #global-status {
       font-size: 11px;
       min-height: 14px;
@@ -123,9 +159,12 @@
     <a class="options-link" href="options.html" target="_blank">⚙ Options</a>
   </header>
   <div id="course-list"></div>
+  <div id="upload-job-status"></div>
   <div class="actions">
     <button id="refresh-btn">Refresh</button>
-    <button id="upload-btn">Upload to GitHub</button>
+    <button id="start-btn">Start</button>
+    <button id="cancel-btn">Cancel</button>
+    <button id="retry-btn">Retry</button>
   </div>
   <div id="global-status" class="global-status"></div>
 </body>

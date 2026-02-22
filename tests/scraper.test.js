@@ -1,7 +1,7 @@
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
 const path = require('path');
-const { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, normalizeHref, safeText } = require('../extension/scraper');
+const { parseCourseList, parseAssignments, parseFileLinks, normalizeCourses, normalizeHref, safeText, enumerateCourseFiles } = require('../extension/scraper');
 
 function loadFixture(name) {
   const html = fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -291,5 +291,21 @@ describe('cleanShortName (via normalizeCourses short_name)', () => {
 
   test('returns undefined/null passthrough', () => {
     expect(clean('')).toBe('');
+  });
+});
+
+describe('enumerateCourseFiles', () => {
+  test('builds deterministic file path list from assignment HTML map', () => {
+    const courseDoc = loadFixture('assignment-page.html');
+    const assignmentDocHtml = fs.readFileSync(path.join(__dirname, 'fixtures', 'download-page.html'), 'utf8');
+
+    const files = enumerateCourseFiles(courseDoc, () => assignmentDocHtml);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files[0]).toEqual(expect.objectContaining({
+      assignmentUrl: expect.stringContaining('/assignments/'),
+      url: expect.stringContaining('https://'),
+      path: expect.stringContaining('/'),
+      filename: expect.any(String),
+    }));
   });
 });
