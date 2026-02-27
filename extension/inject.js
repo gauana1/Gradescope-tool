@@ -43,17 +43,26 @@ async function fetchFile(url, { timeoutMs = 120000, abortSignal, path = '', file
   const { signal, cleanup } = mergeAbortSignals(abortSignal, timeoutMs);
   try {
     let declaredSize = 0;
+    let shouldProbeHead = true;
     try {
-      const headResponse = await fetch(url, {
-        method: 'HEAD',
-        credentials: 'include',
-        signal,
-      });
-      // Only trust Content-Length when HEAD actually succeeded — many Gradescope
-      // endpoints return 4xx/5xx to HEAD but work fine for GET.
-      if (headResponse.ok) {
-        const lengthHeader = headResponse.headers.get('Content-Length') || '0';
-        declaredSize = parseInt(lengthHeader, 10) || 0;
+      const parsed = new URL(url, window.location.origin);
+      shouldProbeHead = /(^|\.)gradescope\.com$/i.test(parsed.hostname);
+    } catch (_) {
+      shouldProbeHead = true;
+    }
+    try {
+      if (shouldProbeHead) {
+        const headResponse = await fetch(url, {
+          method: 'HEAD',
+          credentials: 'include',
+          signal,
+        });
+        // Only trust Content-Length when HEAD actually succeeded — many Gradescope
+        // endpoints return 4xx/5xx to HEAD but work fine for GET.
+        if (headResponse.ok) {
+          const lengthHeader = headResponse.headers.get('Content-Length') || '0';
+          declaredSize = parseInt(lengthHeader, 10) || 0;
+        }
       }
     } catch (_) {
       declaredSize = 0;

@@ -1,171 +1,382 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Gradescope Archiver</title>
   <style>
-    * { box-sizing: border-box; }
+    /* ── Design tokens ─────────────────────────────────────────────── */
+    :root {
+      --primary:       #4f46e5;
+      --primary-dark:  #4338ca;
+      --primary-light: #eef2ff;
+      --success:       #059669;
+      --success-light: #ecfdf5;
+      --error:         #dc2626;
+      --error-light:   #fef2f2;
+      --warn:          #d97706;
+      --warn-light:    #fffbeb;
+      --bg:            #f9fafb;
+      --card:          #ffffff;
+      --border:        #e5e7eb;
+      --text:          #111827;
+      --text-2:        #6b7280;
+      --text-3:        #9ca3af;
+      --radius:        8px;
+      --radius-sm:     5px;
+      --shadow:        0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.05);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      min-width: 320px;
-      max-width: 380px;
-      padding: 14px 16px 12px;
-      margin: 0;
-      color: #202124;
+      margin: 0; padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px; color: var(--text); background: var(--bg);
+      width: 360px; min-height: 200px; overflow-x: hidden;
     }
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 10px;
+    .hidden { display: none !important; }
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: var(--text-2); }
+
+    /* ── Buttons ─────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      padding: 8px 14px; border-radius: var(--radius-sm);
+      border: 1px solid transparent; cursor: pointer;
+      font-size: 12.5px; font-weight: 500; transition: background .15s, opacity .15s;
+      white-space: nowrap;
     }
-    h2 {
-      font-size: 14px;
-      font-weight: 600;
-      margin: 0;
-      letter-spacing: 0.01em;
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn-primary:not(:disabled):hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+    .btn-ghost   { background: var(--card); color: var(--text); border-color: var(--border); }
+    .btn-ghost:not(:disabled):hover   { background: var(--bg); }
+    .btn-sm { padding: 5px 10px; font-size: 11.5px; }
+    .btn-full { width: 100%; }
+
+    /* ── Badge ───────────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block; padding: 1px 7px; border-radius: 20px;
+      font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
     }
-    .options-link {
-      font-size: 11px;
-      color: #1a73e8;
-      text-decoration: none;
+    .badge-idle      { background: var(--border);        color: var(--text-2); }
+    .badge-uploading { background: var(--warn-light);    color: var(--warn); }
+    .badge-done      { background: var(--success-light); color: var(--success); }
+    .badge-error     { background: var(--error-light);   color: var(--error); }
+
+    /* ── Status bar ──────────────────────────────────────────────────── */
+    .status-bar { font-size: 11.5px; min-height: 18px; text-align: center; padding: 2px 8px; }
+    .status-bar.ok   { color: var(--success); }
+    .status-bar.err  { color: var(--error); }
+    .status-bar.info { color: var(--text-2); }
+
+    /* ════════════════════════════════════════════════════════════
+       ONBOARDING
+       ════════════════════════════════════════════════════════════ */
+    #onboarding { display: flex; flex-direction: column; min-height: 380px; }
+
+    .ob-hero {
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+      padding: 28px 24px 20px; color: #fff; text-align: center;
     }
-    .options-link:hover { text-decoration: underline; }
+    .ob-logo  { font-size: 36px; margin-bottom: 8px; display: block; }
+    .ob-hero h1 { margin: 0 0 4px; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+    .ob-hero p  { margin: 0; font-size: 12px; opacity: .85; line-height: 1.5; }
+
+    .ob-steps { display: flex; justify-content: center; gap: 8px; padding: 12px 24px 0; }
+    .ob-step-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--border); transition: background .2s;
+    }
+    .ob-step-dot.active { background: var(--primary); }
+    .ob-step-dot.done   { background: #a5b4fc; }
+
+    .ob-panel {
+      padding: 16px 20px 20px; flex: 1;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .ob-panel h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .ob-panel p  { margin: 0; color: var(--text-2); line-height: 1.55; font-size: 12.5px; }
+
+    .ob-instructions {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 10px 12px;
+      font-size: 12px; color: var(--text-2); line-height: 1.6;
+    }
+    .ob-instructions ol { margin: 4px 0 0; padding-left: 18px; }
+    .ob-instructions li { margin-bottom: 3px; }
+    .ob-instructions code {
+      background: var(--border); padding: 1px 5px; border-radius: 3px;
+      font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+    }
+
+    .ob-input-wrap { position: relative; }
+    .ob-input-wrap input {
+      width: 100%; padding: 9px 36px 9px 10px;
+      border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+      font-size: 12.5px; font-family: inherit; color: var(--text);
+      background: var(--card); transition: border-color .15s;
+    }
+    .ob-input-wrap input:focus  { outline: none; border-color: var(--primary); }
+    .ob-input-wrap input.valid  { border-color: var(--success); }
+    .ob-input-wrap input.invalid{ border-color: var(--error); }
+    .ob-input-eye {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; cursor: pointer; color: var(--text-3);
+      font-size: 14px; padding: 2px; line-height: 1;
+    }
+
+    .ob-feedback { font-size: 12px; min-height: 16px; display: flex; align-items: center; gap: 5px; }
+    .ob-feedback.ok  { color: var(--success); }
+    .ob-feedback.err { color: var(--error); }
+
+    .ob-success-card {
+      background: var(--success-light); border: 1px solid #a7f3d0;
+      border-radius: var(--radius); padding: 14px 16px; text-align: center;
+    }
+    .ob-success-card .avatar {
+      width: 44px; height: 44px; border-radius: 50%;
+      margin: 0 auto 8px; display: block; border: 2px solid #6ee7b7;
+    }
+    .ob-success-card .gh-name { font-weight: 600; font-size: 13px; color: var(--success); }
+    .ob-success-card .gh-sub  { font-size: 11.5px; color: #047857; }
+
+    .ob-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 4px; }
+
+    /* ════════════════════════════════════════════════════════════
+       MAIN SCREEN
+       ════════════════════════════════════════════════════════════ */
+    #main { display: flex; flex-direction: column; min-height: 300px; }
+
+    .main-header {
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+      padding: 10px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .main-header-left { display: flex; align-items: center; gap: 8px; }
+    .main-logo  { font-size: 18px; }
+    .main-title { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: -.01em; }
+    .header-actions { display: flex; gap: 5px; align-items: center; }
+    .icon-btn {
+      background: rgba(255,255,255,.15); border: none; border-radius: 5px;
+      color: #fff; font-size: 14px; padding: 4px 6px; cursor: pointer;
+      line-height: 1; transition: background .15s;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,.25); }
+
+    .gh-chip {
+      display: flex; align-items: center; gap: 5px;
+      background: rgba(255,255,255,.15); border-radius: 20px;
+      padding: 2px 8px 2px 2px; font-size: 11px; color: #fff;
+    }
+    .gh-chip img { width: 18px; height: 18px; border-radius: 50%; }
+
+    .main-body { flex: 1; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+    .section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--text-3); margin-bottom: -3px;
+    }
+
     #course-list {
-      max-height: 280px;
-      overflow-y: auto;
-      border: 1px solid #e0e0e0;
-      border-radius: 6px;
-      padding: 4px;
-      margin-bottom: 10px;
-      background: #fafafa;
+      max-height: 220px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--card); box-shadow: var(--shadow);
     }
     .course-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 8px;
-      border-radius: 4px;
-      font-size: 13px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-bottom: 1px solid var(--border);
+      transition: background .1s;
     }
-    .course-item:hover { background: #eef2ff; }
-    .course-label {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex: 1;
-      cursor: pointer;
-      user-select: none;
-      min-width: 0;
+    .course-item:last-child { border-bottom: none; }
+    .course-item:hover { background: var(--primary-light); }
+    .course-cb   { accent-color: var(--primary); flex-shrink: 0; }
+    .course-info { flex: 1; min-width: 0; }
+    .course-name {
+      font-size: 12.5px; font-weight: 500;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .course-label input[type="checkbox"] { flex-shrink: 0; accent-color: #1a73e8; }
-    .course-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .course-status { font-size: 11px; white-space: nowrap; }
-    .course-status a { color: #1a73e8; text-decoration: none; }
-    .course-status a:hover { text-decoration: underline; }
-    .status-done { color: #1e8c3a; }
-    .status-uploading { color: #e65100; }
-    .status-error { color: #c0392b; }
-    .status-idle { color: transparent; }
-    .repo-link { font-size: 11px; color: #1a73e8; text-decoration: none; margin-left: 8px; }
-    .repo-link:hover { text-decoration: underline; }
-    .empty {
-      color: #9aa0a6;
-      font-size: 12px;
-      text-align: center;
-      padding: 20px 0;
-      margin: 0;
+    .course-meta    { font-size: 10.5px; color: var(--text-3); }
+    .course-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+
+    .empty-state { padding: 28px 16px; text-align: center; color: var(--text-2); }
+    .empty-state .empty-icon  { font-size: 28px; margin-bottom: 6px; }
+    .empty-state .empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .empty-state p { font-size: 11.5px; margin: 0; line-height: 1.55; }
+
+    #job-panel {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--card); box-shadow: var(--shadow); overflow: hidden;
     }
-    .actions {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 8px;
+    .job-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--bg);
     }
-    #refresh-btn {
-      flex: 1;
-      padding: 7px 0;
-      background: #fff;
-      color: #444;
-      border: 1px solid #dadce0;
-      border-radius: 4px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    #refresh-btn:hover { background: #f1f3f4; }
-    #refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    #start-btn {
-      flex: 2;
-      padding: 7px 0;
-      background: #1a73e8;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-    }
-    #start-btn:hover { background: #1558b0; }
-    #start-btn:disabled { background: #b0b0b0; cursor: not-allowed; }
-    #cancel-btn,
-    #retry-btn {
-      flex: 1;
-      padding: 7px 0;
-      background: #fff;
-      color: #444;
-      border: 1px solid #dadce0;
-      border-radius: 4px;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    #cancel-btn:hover,
-    #retry-btn:hover { background: #f1f3f4; }
-    #upload-job-status {
-      max-height: 150px;
-      overflow-y: auto;
-      border: 1px solid #e0e0e0;
-      border-radius: 6px;
-      padding: 6px;
-      margin-bottom: 8px;
-      background: #fafafa;
-      font-size: 11px;
-    }
-    .job-summary { margin-bottom: 6px; color: #555; }
+    .job-header-left { font-size: 12px; font-weight: 600; }
+    .job-stats       { font-size: 10.5px; color: var(--text-2); }
+    .progress-track  { height: 3px; background: var(--border); }
+    .progress-fill   { height: 100%; background: var(--primary); transition: width .4s ease; border-radius: 0 2px 2px 0; }
+    .job-files       { max-height: 120px; overflow-y: auto; padding: 4px 0; }
     .job-file-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 2px 0;
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 10px; font-size: 11px;
     }
-    .job-file-path {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 220px;
+    .job-file-row:hover { background: var(--bg); }
+    .jfr-icon   { flex-shrink: 0; font-size: 10px; }
+    .jfr-path   { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .jfr-status { flex-shrink: 0; font-size: 10px; font-weight: 500; white-space: nowrap; }
+    .jfr-status.done        { color: var(--success); }
+    .jfr-status.in_progress { color: var(--warn); }
+    .jfr-status.error       { color: var(--error); }
+    .jfr-status.skipped     { color: var(--text-3); }
+    .jfr-status.pending     { color: var(--text-3); }
+
+    .action-row { display: flex; gap: 6px; }
+
+    .token-banner {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--warn-light); border: 1px solid #fde68a;
+      border-radius: var(--radius-sm); padding: 7px 10px;
+      font-size: 11.5px; color: #92400e;
     }
-    #global-status {
-      font-size: 11px;
-      min-height: 14px;
-      text-align: center;
+    .token-banner a { color: #92400e; font-weight: 600; }
+
+    #toast {
+      position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+      background: #1f2937; color: #fff; font-size: 11.5px;
+      padding: 6px 14px; border-radius: 20px; white-space: nowrap;
+      opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 100;
     }
-    .global-status.status-error { color: #c0392b; }
-    .global-status.status-ok { color: #1e8c3a; }
-    .global-status.status-info { color: #555; }
+    #toast.show { opacity: 1; }
   </style>
-  <script src="popup.js" defer></script>
 </head>
 <body>
-  <header>
-    <h2>Gradescope Archiver</h2>
-    <a class="options-link" href="options.html" target="_blank">⚙ Options</a>
-  </header>
-  <div id="course-list"></div>
-  <div id="upload-job-status"></div>
-  <div class="actions">
-    <button id="refresh-btn">Refresh</button>
-    <button id="start-btn">Start</button>
-    <button id="cancel-btn">Cancel</button>
-    <button id="retry-btn">Retry</button>
+
+<!-- ══ ONBOARDING ══ -->
+<div id="onboarding">
+  <div class="ob-hero">
+    <span class="ob-logo">📚</span>
+    <h1>Gradescope Archiver</h1>
+    <p>Automatically back up your submissions to a private GitHub repo.</p>
   </div>
-  <div id="global-status" class="global-status"></div>
+  <div class="ob-steps">
+    <div class="ob-step-dot active" id="dot-0"></div>
+    <div class="ob-step-dot" id="dot-1"></div>
+    <div class="ob-step-dot" id="dot-2"></div>
+  </div>
+
+  <!-- Step 0: Welcome -->
+  <div class="ob-panel" id="ob-step-0">
+    <h2>Welcome! 👋</h2>
+    <p>This extension scrapes your Gradescope courses and uploads all submitted files to a private GitHub repository you own.</p>
+    <div class="ob-instructions">
+      <strong>What you'll need:</strong>
+      <ol>
+        <li>A <strong>GitHub account</strong></li>
+        <li>A Personal Access Token with <code>repo</code> scope</li>
+        <li>Be logged in to Gradescope in this browser</li>
+      </ol>
+    </div>
+    <p class="muted" style="font-size:11.5px">Setup takes ~2 minutes. Your token is stored locally and never leaves your device.</p>
+    <div class="ob-actions">
+      <button class="btn btn-primary btn-full" id="ob-next-0">Get Started →</button>
+    </div>
+  </div>
+
+  <!-- Step 1: GitHub token -->
+  <div class="ob-panel hidden" id="ob-step-1">
+    <h2>Connect GitHub 🔗</h2>
+    <div class="ob-instructions">
+      <strong>Create a token:</strong>
+      <ol>
+        <li>Go to <a href="https://github.com/settings/tokens/new" target="_blank">github.com/settings/tokens/new</a></li>
+        <li>Give it a name like <code>gradescope-archiver</code></li>
+        <li>Check the <code>repo</code> scope</li>
+        <li>Click <strong>Generate token</strong> and copy it</li>
+      </ol>
+    </div>
+    <div class="ob-input-wrap">
+      <input id="ob-pat-input" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false" />
+      <button class="ob-input-eye" id="ob-pat-eye" title="Show/hide token">👁</button>
+    </div>
+    <div class="ob-feedback" id="ob-pat-feedback"></div>
+    <div class="ob-actions">
+      <button class="btn btn-ghost" id="ob-back-1">← Back</button>
+      <button class="btn btn-primary" id="ob-validate-btn" style="flex:1">Validate Token</button>
+    </div>
+  </div>
+
+  <!-- Step 2: All set -->
+  <div class="ob-panel hidden" id="ob-step-2">
+    <h2>All set! 🎉</h2>
+    <div class="ob-success-card">
+      <img class="avatar" id="ob-avatar" src="" alt="" />
+      <div class="gh-name" id="ob-gh-login"></div>
+      <div class="gh-sub">GitHub connected ✓ — ready to archive</div>
+    </div>
+    <p style="font-size:12px">Next, visit your Gradescope dashboard so the extension can find your courses, then press <strong>Refresh</strong>.</p>
+    <div class="ob-actions">
+      <button class="btn btn-ghost" id="ob-open-gs">Open Gradescope ↗</button>
+      <button class="btn btn-primary" id="ob-finish" style="flex:1">Go to Dashboard →</button>
+    </div>
+  </div>
+</div><!-- /#onboarding -->
+
+
+<!-- ══ MAIN SCREEN ══ -->
+<div id="main" class="hidden">
+  <div class="main-header">
+    <div class="main-header-left">
+      <span class="main-logo">📚</span>
+      <div>
+        <div class="main-title">Gradescope Archiver</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="gh-chip hidden" id="gh-chip">
+        <img id="gh-avatar" src="" alt="" />
+        <span id="gh-login"></span>
+      </div>
+      <button class="icon-btn" id="settings-btn" title="Settings">⚙</button>
+    </div>
+  </div>
+
+  <div class="main-body">
+    <div class="token-banner hidden" id="token-banner">
+      ⚠️ No GitHub token found. <a href="#" id="banner-setup-link">Set one up</a>
+    </div>
+
+    <div class="section-label">Your Courses</div>
+    <div id="course-list">
+      <div class="empty-state">
+        <div class="empty-icon">🎓</div>
+        <div class="empty-title">No courses found</div>
+        <p>Visit your <a href="https://www.gradescope.com" target="_blank">Gradescope dashboard</a> then press Refresh.</p>
+      </div>
+    </div>
+
+    <div id="job-panel" class="hidden">
+      <div class="job-header">
+        <span class="job-header-left" id="job-title">Upload progress</span>
+        <span class="job-stats" id="job-stats"></span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="job-files" id="job-files"></div>
+    </div>
+
+    <div class="action-row">
+      <button class="btn btn-ghost"   id="refresh-btn" style="flex:1">↻ Refresh</button>
+      <button class="btn btn-primary" id="start-btn"   style="flex:2" disabled>⬆ Archive Selected</button>
+    </div>
+    <div class="action-row hidden" id="secondary-actions">
+      <button class="btn btn-ghost btn-sm" id="cancel-btn" style="flex:1">✕ Cancel</button>
+      <button class="btn btn-ghost btn-sm" id="retry-btn"  style="flex:1">↺ Retry</button>
+    </div>
+
+    <div class="status-bar info" id="global-status"></div>
+  </div>
+</div><!-- /#main -->
+
+<div id="toast"></div>
+<script src="popup.js" type="module"></script>
 </body>
 </html>

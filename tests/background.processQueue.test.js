@@ -6,6 +6,7 @@ jest.mock('../extension/github-api.js', () => ({
     html_url: 'https://github.com/tester/gradescope-course',
     default_branch: 'main',
   }),
+  initEmptyRepo: jest.fn().mockResolvedValue({ commitSha: 'init-commit-sha', branch: 'main' }),
   getDefaultBranchSha: jest.fn().mockResolvedValue('parent-sha'),
   getCommitTreeSha: jest.fn().mockResolvedValue('base-tree-sha'),
   createBlob: jest.fn().mockResolvedValue({ sha: 'blob-sha-1' }),

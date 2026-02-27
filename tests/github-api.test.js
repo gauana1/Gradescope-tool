@@ -5,6 +5,7 @@
 const {
   getAuthenticatedUser,
   createRepo,
+  initEmptyRepo,
   getDefaultBranchSha,
   getCommitTreeSha,
   createBlob,
@@ -75,7 +76,7 @@ describe('createRepo', () => {
     expect(repo.default_branch).toBe('main');
     const body = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(body.private).toBe(true);
-    expect(body.auto_init).toBe(true);
+    expect(body.auto_init).toBeUndefined();
   });
 
   test('on 422 (already exists) falls back to fetching existing repo', async () => {
@@ -103,6 +104,32 @@ describe('createRepo', () => {
     await createRepo(TOKEN, REPO); // no options passed
     const body = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(body.private).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// initEmptyRepo
+// ---------------------------------------------------------------------------
+describe('initEmptyRepo', () => {
+  test('creates initial commit via Contents API and returns commitSha', async () => {
+    mockFetch(201, {
+      commit: { sha: 'abc123' },
+      content: { name: 'README.md' },
+    });
+    const result = await initEmptyRepo(TOKEN, OWNER, REPO, 'main', '# hello');
+    expect(result.commitSha).toBe('abc123');
+    expect(result.branch).toBe('main');
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toContain('/contents/README.md');
+    expect(opts.method).toBe('PUT');
+    const body = JSON.parse(opts.body);
+    expect(body.message).toBe('Initial commit');
+    expect(body.branch).toBe('main');
+  });
+
+  test('throws on API error', async () => {
+    mockFetch(422, { message: 'Invalid request' });
+    await expect(initEmptyRepo(TOKEN, OWNER, REPO)).rejects.toThrow('initEmptyRepo failed: 422');
   });
 });
 

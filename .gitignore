@@ -21,3 +21,6 @@ ignore_courses.json
 # Node / Jest (test runner for Chrome extension)
 node_modules/
 package-lock.json
+
+# Build output
+dist/

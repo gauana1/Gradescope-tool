@@ -1,221 +1,375 @@
-// popup.js
-window.addEventListener('DOMContentLoaded', async () => {
-  await renderAll();
+// popup.js — Gradescope Archiver
+
+// ─── Onboarding ────────────────────────────────────────────────────────────
+
+let obCurrentStep = 0;
+
+async function initPopup() {
+  const { githubToken, ghUser } = await chrome.storage.local.get(['githubToken', 'ghUser']);
+  if (!githubToken) {
+    showScreen('onboarding');
+    goToStep(0);
+  } else {
+    showScreen('main');
+    renderGhChip(ghUser || null);
+    await renderAll();
+  }
+}
+
+function showScreen(id) {
+  document.getElementById('onboarding').classList.toggle('hidden', id !== 'onboarding');
+  document.getElementById('main').classList.toggle('hidden', id !== 'main');
+}
+
+function goToStep(n) {
+  [0, 1, 2].forEach((i) => {
+    document.getElementById(`ob-step-${i}`)?.classList.toggle('hidden', i !== n);
+    const dot = document.getElementById(`dot-${i}`);
+    if (dot) {
+      dot.classList.toggle('active', i === n);
+      dot.classList.toggle('done', i < n);
+    }
+  });
+  obCurrentStep = n;
+}
+
+document.getElementById('ob-next-0')?.addEventListener('click', () => goToStep(1));
+document.getElementById('ob-back-1')?.addEventListener('click', () => goToStep(0));
+
+document.getElementById('ob-pat-eye')?.addEventListener('click', () => {
+  const inp = document.getElementById('ob-pat-input');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
 });
 
-document.getElementById('refresh-btn').addEventListener('click', async () => {
-  setGlobalStatus('Refreshing courses…', 'info');
-  const refreshBtn = document.getElementById('refresh-btn');
-  refreshBtn.disabled = true;
-  const timeoutId = setTimeout(() => {
-    refreshBtn.disabled = false;
-    setGlobalStatus('Refresh timed out. Try again from a Gradescope page.', 'error');
-  }, 10000);
+document.getElementById('ob-validate-btn')?.addEventListener('click', async () => {
+  const btn   = document.getElementById('ob-validate-btn');
+  const inp   = document.getElementById('ob-pat-input');
+  const fb    = document.getElementById('ob-pat-feedback');
+  const token = inp.value.trim();
+
+  if (!token) { setFeedback(fb, '⚠ Paste your token first.', 'err'); inp.classList.add('invalid'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Validating…';
+  inp.classList.remove('valid', 'invalid');
+  setFeedback(fb, '', '');
+
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'REFRESH_COURSES' });
-    if (!response?.ok) {
-      setGlobalStatus(`Refresh failed: ${response?.error || 'Unknown error'}`, 'error');
-      refreshBtn.disabled = false;
-      clearTimeout(timeoutId);
-      return;
+    const result = await chrome.runtime.sendMessage({ type: 'VALIDATE_TOKEN', payload: { token } });
+    if (result?.ok) {
+      inp.classList.add('valid');
+      inp.value = '';
+      await chrome.storage.local.set({ githubToken: token, ghUser: result.user });
+
+      const avatarEl = document.getElementById('ob-avatar');
+      const loginEl  = document.getElementById('ob-gh-login');
+      if (avatarEl && result.user?.avatarUrl) avatarEl.src = result.user.avatarUrl;
+      if (loginEl  && result.user?.login)     loginEl.textContent = `@${result.user.login}`;
+
+      setFeedback(fb, '✓ Token valid!', 'ok');
+      setTimeout(() => goToStep(2), 600);
+    } else {
+      inp.classList.add('invalid');
+      setFeedback(fb, `✗ ${result?.error || 'Token invalid — check it has "repo" scope.'}`, 'err');
+    }
+  } catch (err) {
+    inp.classList.add('invalid');
+    setFeedback(fb, `✗ ${err.message || 'Validation failed'}`, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Validate Token';
+  }
+});
+
+document.getElementById('ob-open-gs')?.addEventListener('click', () => {
+  chrome.tabs.create({ url: 'https://www.gradescope.com/', active: true });
+});
+
+document.getElementById('ob-finish')?.addEventListener('click', async () => {
+  const { ghUser } = await chrome.storage.local.get('ghUser');
+  showScreen('main');
+  renderGhChip(ghUser || null);
+  await renderAll();
+  triggerRefresh(true);
+});
+
+function setFeedback(el, msg, cls) {
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `ob-feedback${cls ? ' ' + cls : ''}`;
+}
+
+// ─── GitHub chip ───────────────────────────────────────────────────────────
+
+function renderGhChip(ghUser) {
+  const chip   = document.getElementById('gh-chip');
+  const avatar = document.getElementById('gh-avatar');
+  const login  = document.getElementById('gh-login');
+  if (!chip) return;
+  if (ghUser?.login) {
+    if (avatar) avatar.src = ghUser.avatarUrl || '';
+    if (login)  login.textContent = ghUser.login;
+    chip.classList.remove('hidden');
+  } else {
+    chip.classList.add('hidden');
+  }
+}
+
+// ─── Main screen actions ───────────────────────────────────────────────────
+
+document.getElementById('settings-btn')?.addEventListener('click', () => {
+  chrome.runtime.openOptionsPage();
+});
+
+document.getElementById('banner-setup-link')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  showScreen('onboarding');
+  goToStep(1);
+});
+
+document.getElementById('refresh-btn')?.addEventListener('click', () => triggerRefresh(false));
+
+async function triggerRefresh(silent = false) {
+  const btn = document.getElementById('refresh-btn');
+  if (btn) btn.disabled = true;
+  if (!silent) setStatus('Refreshing courses…', 'info');
+
+  const timeoutId = setTimeout(() => {
+    if (btn) btn.disabled = false;
+    if (!silent) setStatus('Refresh timed out. Visit Gradescope first.', 'err');
+  }, 15000);
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'REFRESH_COURSES' });
+    clearTimeout(timeoutId);
+    if (btn) btn.disabled = false;
+    if (!res?.ok) {
+      setStatus(res?.error || 'Refresh failed.', 'err');
+    } else if (!silent) {
+      setStatus('', '');
     }
     await renderAll();
-    refreshBtn.disabled = false;
+  } catch (err) {
     clearTimeout(timeoutId);
-    setGlobalStatus('Refresh requested. Course list updated.', 'ok');
-  } catch (error) {
-    setGlobalStatus(`Refresh failed: ${error?.message || String(error)}`, 'error');
-    refreshBtn.disabled = false;
-    clearTimeout(timeoutId);
+    if (btn) btn.disabled = false;
+    setStatus(err.message || 'Refresh failed', 'err');
   }
-});
+}
 
-document.getElementById('start-btn').addEventListener('click', async () => {
+document.getElementById('start-btn')?.addEventListener('click', async () => {
   const { uploadJob } = await chrome.storage.local.get('uploadJob');
-  if (isUploadRunning(uploadJob)) {
-    setGlobalStatus('An upload is already running. Please wait for it to finish.', 'info');
-    return;
-  }
+  if (isRunning(uploadJob)) { setStatus('Upload already running — please wait.', 'info'); return; }
 
   const checked = [...document.querySelectorAll('.course-cb:checked')].map((cb) => cb.dataset.courseId);
-  if (!checked.length) {
-    setGlobalStatus('Select at least one course.', 'error');
-    return;
-  }
+  if (!checked.length) { showToast('Select at least one course first.'); return; }
 
-  setGlobalStatus('Upload started…', 'info');
-  syncActionButtons({ status: 'in_progress' });
+  setStatus('Starting archive…', 'info');
+  syncButtons({ status: 'in_progress' });
 
-  const response = await chrome.runtime.sendMessage({ type: 'START_UPLOAD', payload: { course_id: checked[0] } });
-  if (response?.error || response?.ok === false) {
-    setGlobalStatus(`Failed to start upload: ${response?.error || 'Unknown error'}`, 'error');
+  const res = await chrome.runtime.sendMessage({ type: 'START_UPLOAD', payload: { course_id: checked[0] } });
+  if (res?.error || res?.ok === false) {
+    setStatus(res?.error || 'Failed to start upload.', 'err');
+    syncButtons(null);
   }
   await renderAll();
 });
 
-document.getElementById('cancel-btn').addEventListener('click', async () => {
+document.getElementById('cancel-btn')?.addEventListener('click', async () => {
   const { uploadJob } = await chrome.storage.local.get('uploadJob');
-  if (!uploadJob || isUploadRunning(uploadJob)) return;
+  if (!uploadJob) return;
   await chrome.runtime.sendMessage({ type: 'CANCEL_UPLOAD', payload: { course_id: uploadJob.courseId } });
-  setGlobalStatus('Upload cancelled.', 'info');
+  setStatus('Upload cancelled.', 'info');
   await renderAll();
 });
 
-document.getElementById('retry-btn').addEventListener('click', async () => {
+document.getElementById('retry-btn')?.addEventListener('click', async () => {
   const { uploadJob } = await chrome.storage.local.get('uploadJob');
-  if (!uploadJob || isUploadRunning(uploadJob)) return;
+  if (!uploadJob) return;
   await chrome.runtime.sendMessage({ type: 'RETRY_FILE', payload: { course_id: uploadJob.courseId } });
-  setGlobalStatus('Retry requested…', 'info');
+  setStatus('Retrying…', 'info');
   await renderAll();
 });
 
-// Listen for progress updates from background
-chrome.runtime.onMessage.addListener((message) => {
-  if (!message) return;
-  const p = message.payload || {};
-  if (message.type === 'UPLOAD_PROGRESS') {
-    setGlobalStatus(`${p.step} (${p.pct}%)`, 'info');
+// ─── Background message listener ──────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg) return;
+  const p = msg.payload || {};
+  if (msg.type === 'UPLOAD_PROGRESS') {
+    setStatus(`${p.step}${Number.isFinite(p.pct) ? ` (${p.pct}%)` : ''}`, 'info');
+    updateProgressBar(p.pct);
     renderAll();
-  } else if (message.type === 'UPLOAD_DONE') {
-    setGlobalStatus('Upload complete.', 'ok', p.repoUrl ? { href: p.repoUrl, label: 'Open GitHub repo' } : null);
+  } else if (msg.type === 'UPLOAD_DONE') {
+    setStatus('Archive complete! ✓', 'ok');
+    updateProgressBar(100);
+    if (p.repoUrl) {
+      showToast('Uploaded! Opening GitHub repo…');
+      setTimeout(() => chrome.tabs.create({ url: p.repoUrl, active: true }), 800);
+    }
     renderAll();
-  } else if (message.type === 'UPLOAD_ERROR') {
-    setGlobalStatus(`Upload failed: ${p.error || 'Unknown error'}`, 'error');
+  } else if (msg.type === 'UPLOAD_ERROR') {
+    setStatus(`Error: ${p.error || 'Unknown error'}`, 'err');
     renderAll();
-  } else if (message.type === 'COURSES_UPDATED') {
+  } else if (msg.type === 'COURSES_UPDATED') {
     renderAll();
-    document.getElementById('refresh-btn').disabled = false;
-    const hasError = !!message.error;
-    setGlobalStatus(hasError ? `Refresh failed: ${message.error}` : 'Courses refreshed!', hasError ? 'error' : 'ok');
+    const btn = document.getElementById('refresh-btn');
+    if (btn) btn.disabled = false;
+    if (!msg.error) setStatus('Courses updated ✓', 'ok');
   }
 });
+
+// ─── Render helpers ────────────────────────────────────────────────────────
 
 async function renderAll() {
-  const { uploadJob } = await chrome.storage.local.get('uploadJob');
-  syncActionButtons(uploadJob);
+  const { uploadJob, githubToken } = await chrome.storage.local.get(['uploadJob', 'githubToken']);
+  const banner = document.getElementById('token-banner');
+  if (banner) banner.classList.toggle('hidden', !!githubToken);
+  syncButtons(uploadJob);
   await renderCourses(uploadJob);
-  await renderUploadJobFiles(uploadJob);
+  renderJobPanel(uploadJob);
 }
 
-async function renderCourses(uploadJobArg = null) {
-  const { courses, uploadJob } = await chrome.storage.local.get(['courses', 'uploadJob']);
-  const { repoMap = {} } = await chrome.storage.local.get('repoMap');
-  const activeJob = uploadJobArg || uploadJob;
+async function renderCourses(activeJob) {
+  const { courses, repoMap } = await chrome.storage.local.get(['courses', 'repoMap']);
   const list = document.getElementById('course-list');
+  if (!list) return;
 
-  if (!courses || courses.length === 0) {
-    list.innerHTML = '<p class="empty">No courses found.<br>Visit your Gradescope dashboard first.</p>';
+  if (!courses?.length) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🎓</div>
+        <div class="empty-title">No courses yet</div>
+        <p>Visit your <a href="https://www.gradescope.com" target="_blank">Gradescope dashboard</a> and press <strong>Refresh</strong>.</p>
+      </div>`;
+    const startBtn = document.getElementById('start-btn');
+    if (startBtn) startBtn.disabled = true;
     return;
   }
 
+  const running = isRunning(activeJob);
   list.innerHTML = '';
-  for (const course of courses) {
+  for (const c of courses) {
+    const isActive = running && activeJob?.courseId === c.course_id;
+    const repo     = repoMap?.[c.course_id];
+    const status   = isActive ? 'uploading' : (c.status || 'idle');
+    const statusLabels = { idle: '', uploading: 'Archiving…', done: 'Done', error: 'Error' };
+
     const item = document.createElement('div');
     item.className = 'course-item';
-    const isActiveUpload = activeJob?.status === 'in_progress' && activeJob.courseId === course.course_id;
-    const isAnyUploadRunning = isUploadRunning(activeJob);
-    const repoInfo = repoMap[course.course_id];
-    const repoLink = repoInfo ? `<a href="${repoInfo.url}" target="_blank" class="repo-link">↗ repo</a>` : '';
-
-    let statusLabel = '';
-    let statusClass = `status-${course.status || 'idle'}`;
-    if (isActiveUpload) {
-      const progressKey = `progress_${course.course_id}`;
-      chrome.storage.local.get(progressKey).then((data) => {
-        const progress = data[progressKey];
-        const statusEl = document.getElementById(`status-${course.course_id}`);
-        if (statusEl && progress?.step) {
-          statusEl.textContent = `${progress.step}${Number.isFinite(progress.pct) ? ` (${progress.pct}%)` : ''}`;
-        }
-      }).catch(() => {});
-      statusLabel = 'Uploading…';
-      statusClass = 'status-uploading';
-    } else if (course.status === 'done') {
-      statusLabel = 'Done';
-      statusClass = 'status-done';
-    } else if (course.status === 'error') {
-      statusLabel = 'Failed';
-      statusClass = 'status-error';
-    }
-
     item.innerHTML = `
-      <label class="course-label">
-        <input type="checkbox" class="course-cb" data-course-id="${course.course_id}" ${isAnyUploadRunning ? 'disabled' : ''} />
-        <span class="course-name">${course.short_name || 'Course ' + course.course_id}</span>
-      </label>
-      <span class="course-status ${statusClass}" id="status-${course.course_id}">${statusLabel}</span>
-      ${repoLink}
-    `;
+      <input type="checkbox" class="course-cb" data-course-id="${c.course_id}" ${running ? 'disabled' : ''} />
+      <div class="course-info">
+        <div class="course-name">${escHtml(c.short_name || c.full_name || 'Course ' + c.course_id)}</div>
+        ${c.term ? `<div class="course-meta">${escHtml(c.term)}</div>` : ''}
+      </div>
+      <div class="course-actions">
+        ${repo ? `<a href="${repo.url}" target="_blank" title="Open GitHub repo" style="font-size:12px">↗</a>` : ''}
+        ${status !== 'idle' ? `<span class="badge badge-${status}">${statusLabels[status] || status}</span>` : ''}
+      </div>`;
     list.appendChild(item);
   }
+
+  const startBtn = document.getElementById('start-btn');
+  if (startBtn) startBtn.disabled = running;
+
+  list.querySelectorAll('.course-cb').forEach((cb) => {
+    cb.addEventListener('change', updateStartBtnState);
+  });
+  updateStartBtnState();
 }
 
-async function renderUploadJobFiles(uploadJobArg = null) {
-  const { uploadJob } = uploadJobArg ? { uploadJob: uploadJobArg } : await chrome.storage.local.get('uploadJob');
-  const panel = document.getElementById('upload-job-status');
+function updateStartBtnState() {
+  const anyChecked = !!document.querySelector('.course-cb:checked');
+  const btn = document.getElementById('start-btn');
+  // Always reflect checkbox state — no guard so checking a box can re-enable the button
+  if (btn) btn.disabled = !anyChecked;
+}
+
+function renderJobPanel(uploadJob) {
+  const panel = document.getElementById('job-panel');
+  const sec   = document.getElementById('secondary-actions');
   if (!panel) return;
 
-  if (!uploadJob || !uploadJob.files || uploadJob.files.length === 0) {
-    panel.innerHTML = '<p class="empty">No active upload job.</p>';
+  if (!uploadJob?.files?.length) {
+    panel.classList.add('hidden');
+    if (sec) sec.classList.add('hidden');
     return;
   }
 
-  const summary = document.createElement('div');
-  summary.className = 'job-summary';
-  const done = uploadJob.files.filter((file) => file.status === 'done' || file.status === 'skipped').length;
-  const total = uploadJob.files.length;
-  const failed = uploadJob.files.filter((file) => file.status === 'error').length;
-  const skipped = uploadJob.files.filter((file) => file.status === 'skipped').length;
-  summary.innerHTML = `<strong>Course ${uploadJob.courseId}</strong> • ${done}/${total} complete • ${failed} failed • ${skipped} skipped`;
+  panel.classList.remove('hidden');
+  if (sec) sec.classList.remove('hidden');
 
-  const list = document.createElement('div');
-  list.className = 'job-file-list';
-  uploadJob.files.forEach((file) => {
-    const row = document.createElement('div');
-    row.className = 'job-file-row';
-    row.innerHTML = `<span class="job-file-path">${file.path}</span><span class="job-file-status status-${file.status}">${file.status}</span>`;
-    list.appendChild(row);
-  });
+  const total  = uploadJob.files.length;
+  const done   = uploadJob.files.filter((f) => f.status === 'done' || f.status === 'skipped').length;
+  const errors = uploadJob.files.filter((f) => f.status === 'error').length;
+  const pct    = total ? Math.round((done / total) * 100) : 0;
 
-  panel.innerHTML = '';
-  panel.appendChild(summary);
-  panel.appendChild(list);
+  const titleEl = document.getElementById('job-title');
+  const statsEl = document.getElementById('job-stats');
+  const fillEl  = document.getElementById('progress-fill');
+  const filesEl = document.getElementById('job-files');
 
-  if (uploadJob.status === 'error' && uploadJob.error) {
-    const err = document.createElement('div');
-    err.className = 'global-status status-error';
-    err.textContent = `Error: ${uploadJob.error}`;
-    panel.appendChild(err);
+  if (titleEl) titleEl.textContent = `Archiving course ${uploadJob.courseId}`;
+  if (statsEl) statsEl.textContent = `${done}/${total} files${errors ? ` · ${errors} errors` : ''}`;
+  if (fillEl)  fillEl.style.width = `${pct}%`;
+
+  if (filesEl) {
+    const iconMap = { done: '✓', error: '✗', in_progress: '⋯', skipped: '–', pending: '·' };
+    filesEl.innerHTML = uploadJob.files.map((f) => `
+      <div class="job-file-row">
+        <span class="jfr-icon">${iconMap[f.status] || '·'}</span>
+        <span class="jfr-path">${escHtml(f.path)}</span>
+        <span class="jfr-status ${f.status}">${f.status}</span>
+      </div>`).join('');
+    const activeRow = filesEl.querySelector('.jfr-status.in_progress, .jfr-status.pending');
+    if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
   }
 }
 
-function setGlobalStatus(msg, cls, link = null) {
+function updateProgressBar(pct) {
+  const fill = document.getElementById('progress-fill');
+  if (fill && Number.isFinite(pct)) fill.style.width = `${pct}%`;
+}
+
+function syncButtons(uploadJob) {
+  const running = isRunning(uploadJob);
+  const r = document.getElementById('refresh-btn');
+  const s = document.getElementById('start-btn');
+  const c = document.getElementById('cancel-btn');
+  const t = document.getElementById('retry-btn');
+  if (r) r.disabled = running;
+  if (s) s.disabled = running;
+  if (c) c.disabled = !running;
+  if (t) t.disabled = isRunning(uploadJob) || (uploadJob?.status !== 'error');
+}
+
+function setStatus(msg, cls) {
   const el = document.getElementById('global-status');
-  if (el) {
-    el.textContent = '';
-    const text = document.createTextNode(msg);
-    el.appendChild(text);
-    if (link?.href) {
-      const a = document.createElement('a');
-      a.href = link.href;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      a.textContent = link.label || 'Open link';
-      a.style.marginLeft = '6px';
-      el.appendChild(a);
-    }
-    el.className = `global-status status-${cls}`;
-  }
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `status-bar ${cls}`;
 }
 
-function isUploadRunning(uploadJob) {
-  return !!uploadJob && uploadJob.status === 'in_progress';
+function isRunning(job) { return !!job && job.status === 'in_progress'; }
+
+function showToast(msg, duration = 2500) {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
 }
 
-function syncActionButtons(uploadJob) {
-  const running = isUploadRunning(uploadJob);
-  document.getElementById('refresh-btn').disabled = running;
-  document.getElementById('start-btn').disabled = running;
-  document.getElementById('cancel-btn').disabled = running;
-  document.getElementById('retry-btn').disabled = running;
+function escHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Module scripts run after DOM is parsed; call directly rather than
+// relying on DOMContentLoaded which may have already fired in extension popups.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initPopup);
+} else {
+  initPopup();
 }

@@ -1,10 +1,13 @@
 {
   "name": "gradescope-archiver-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Chrome extension to archive Gradescope courses to GitHub",
   "scripts": {
-    "test": "jest --testPathPattern=tests/"
+    "test":      "jest --testPathPattern=tests/",
+    "build":     "rm -rf dist && mkdir -p dist && cd extension && zip -r ../dist/gradescope-archiver.zip . && echo 'Build complete → dist/gradescope-archiver.zip'",
+    "build:win": "rmdir /s /q dist 2>nul & mkdir dist & cd extension & powershell Compress-Archive -Path * -DestinationPath ../dist/gradescope-archiver.zip",
+    "lint":      "echo 'No linter configured yet'"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",

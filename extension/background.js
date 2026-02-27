@@ -3,7 +3,7 @@ import {
   getAuthenticatedUser,
   createRepo,
   getDefaultBranchSha,
-  getCommitTreeSha,
+  initEmptyRepo,
   createBlob,
   createTree,
   createCommit,
@@ -116,6 +116,17 @@ export async function handleMessage(message, sender) {
     return { ok: true };
   }
 
+  if (message.type === 'VALIDATE_TOKEN') {
+    const { token } = message.payload || {};
+    if (!token) return { ok: false, error: 'No token provided.' };
+    try {
+      const data = await getAuthenticatedUser(token);
+      return { ok: true, user: { login: data.login, name: data.name, avatarUrl: data.avatar_url } };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
   return { ok: false, ignored: true };
 }
 
@@ -154,9 +165,14 @@ export async function startUpload(courseId, preferredTabId = null) {
   await ensureInjectScripts(tabId);
   await setCourseStatus(courseId, 'uploading');
 
+  // Derive a safe repo name: prefer course.github_repo, fall back to slugifying short_name/full_name.
+  const repoName = course.github_repo
+    || slugify(course.short_name || course.full_name || courseId)
+    || `gradescope-${courseId}`;
+
   const initialJob = {
     courseId,
-    repoName: course.github_repo,
+    repoName,
     visibility: 'private',
     status: 'in_progress',
     tabId,
@@ -244,39 +260,42 @@ export async function processNextFile(index) {
   const file = uploadJob.files?.[index];
   if (!file) return;
 
-  uploadJob.files[index] = {
-    ...file,
-    status: 'in_progress',
-    updatedAt: new Date().toISOString(),
-  };
+  uploadJob.files[index] = { ...file, status: 'in_progress', updatedAt: new Date().toISOString() };
   uploadJob.updatedAt = new Date().toISOString();
   await checkpointJob(uploadJob);
-
   await reportProgress(uploadJob.courseId, `Downloading ${file.path}`, computeOverallPct(uploadJob));
 
-  let port;
   try {
-    port = await openKeepalivePort(uploadJob.tabId);
-    await sendTabMessage(uploadJob.tabId, {
-      type: 'FETCH_FILE',
-      payload: {
-        url: file.url,
-        path: file.path,
-        filename: filenameFromPath(file.path),
-        timeoutMs: FETCH_TIMEOUT_MS,
-      },
-    });
-    await waitForFileResolution(file.path, FETCH_TIMEOUT_MS + 30000);
+    // Fetch the file directly from the service worker.
+    // Extension service workers share the browser cookie store (credentials work)
+    // and are not subject to CORS — they bypass it for URLs in host_permissions.
+    // This avoids the CORS block that happens when inject.js (page context) follows
+    // a Gradescope → S3 redirect.
+    const { b64, mimeType, filename: fetchedFilename } = await fetchFileDirectly(file.url);
+
+    // Re-read job after the (potentially slow) fetch — SW may have been restarted
+    const { uploadJob: currentJob, githubToken } = await chrome.storage.local.get(['uploadJob', 'githubToken']);
+    if (!currentJob || currentJob.status !== 'in_progress') return;
+
+    await reportProgress(currentJob.courseId, `Creating blob for ${file.path}`, computeOverallPct(currentJob));
+    const { sha: blobSha } = await createBlob(githubToken, currentJob.owner, currentJob.repoName, b64, 'base64');
+
+    const fileIndex = (currentJob.files || []).findIndex((f) => f.path === file.path && f.status === 'in_progress');
+    if (fileIndex !== -1) {
+      currentJob.files[fileIndex] = {
+        ...currentJob.files[fileIndex],
+        status: 'done',
+        blobSha,
+        mimeType,
+        filename: fetchedFilename || filenameFromPath(file.path),
+        updatedAt: new Date().toISOString(),
+      };
+      currentJob.updatedAt = new Date().toISOString();
+      await checkpointJob(currentJob);
+    }
   } catch (error) {
     await markFileError(file.path, error.message || String(error));
     await scheduleAlarm(RESUME_ALARM, Date.now() + 5000);
-  } finally {
-    if (port) {
-      try {
-        port.disconnect();
-      } catch (_) {
-      }
-    }
   }
 
   await processQueue();
@@ -499,19 +518,27 @@ async function ensureRepoInitialized(job) {
 
   const branch = repo.default_branch || 'main';
   let parentSha = null;
-  let baseTreeSha = null;
   try {
     parentSha = await getDefaultBranchSha(githubToken, user.login, repo.name, branch);
-    baseTreeSha = await getCommitTreeSha(githubToken, user.login, repo.name, parentSha);
   } catch (_) {
     parentSha = null;
-    baseTreeSha = null;
   }
 
-  const fullName = ((courses || []).find((course) => course.course_id === job.courseId)?.full_name) || job.courseId;
-  const readmeText = `# ${fullName}\n\nArchived from Gradescope.\n\nCourse ID: ${job.courseId}\nArchived at: ${new Date().toISOString()}\n`;
-  const readmeB64 = btoa(unescape(encodeURIComponent(readmeText)));
-  const readmeBlob = await createBlob(githubToken, user.login, repo.name, readmeB64, 'base64');
+  // Empty repo — GitHub's Git Data API (createBlob/createTree) returns 409 until
+  // at least one commit exists. Use the Contents API to make the initial commit.
+  if (!parentSha) {
+    try {
+      const fullName = ((courses || []).find((c) => c.course_id === job.courseId)?.full_name) || job.courseId;
+      const { commitSha } = await initEmptyRepo(
+        githubToken, user.login, repo.name, branch,
+        `# ${fullName}\n\nArchived from Gradescope.\n`,
+      );
+      parentSha = commitSha;
+    } catch (initErr) {
+      debugLog('[Archiver] initEmptyRepo failed', { error: initErr?.message });
+      // Non-fatal — finalizeUpload will try with parents: [] which handles this
+    }
+  }
 
   const nextJob = {
     ...job,
@@ -521,8 +548,6 @@ async function ensureRepoInitialized(job) {
     repoId: repo.id,
     branch,
     parentSha,
-    baseTreeSha,
-    readmeBlobSha: readmeBlob.sha,
     updatedAt: new Date().toISOString(),
   };
 
@@ -534,41 +559,49 @@ async function finalizeUpload(job) {
   const { githubToken, courses, repoMap: existingRepoMap = {} } = await chrome.storage.local.get(['githubToken', 'courses', 'repoMap']);
   const files = (job.files || []).filter((entry) => entry.status === 'done' && entry.blobSha);
 
-  const deleteEntries = files
-    .filter((entry) => entry.originalPath && entry.originalPath !== entry.path)
-    .map((entry) => ({ path: entry.originalPath, sha: null }));
-
-  const treeEntries = [
-    { path: 'README.md', mode: '100644', type: 'blob', sha: job.readmeBlobSha },
-    ...files.map((entry) => ({ path: entry.path, mode: '100644', type: 'blob', sha: entry.blobSha })),
-    ...deleteEntries,
-  ];
+  // Guard: exclude any add entry whose blobSha is missing
+  const addEntries = files
+    .filter((entry) => entry.blobSha)
+    .map((entry) => ({ path: entry.path, mode: '100644', type: 'blob', sha: entry.blobSha }));
 
   let commit = null;
   let lastFinalizeError = null;
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
+      // Re-create the README blob fresh on every attempt.
+      // Using the blob SHA from ensureRepoInitialized causes GitRPC::BadObjectState
+      // because those objects were created right after auto_init and may not be
+      // fully replicated on GitHub's backend yet.
+      await reportProgress(job.courseId, `Preparing README (attempt ${attempt})`, 92);
+      const fullName = ((courses || []).find((c) => c.course_id === job.courseId)?.full_name) || job.courseId;
+      const readmeText = `# ${fullName}\n\nArchived from Gradescope.\n\nCourse ID: ${job.courseId}\nArchived at: ${new Date().toISOString()}\n`;
+      const readmeB64 = btoa(unescape(encodeURIComponent(readmeText)));
+      const readmeBlob = await createBlob(githubToken, job.owner, job.repoName, readmeB64, 'base64');
+
+      // Always use base_tree: null — we're building a complete course snapshot,
+      // so we don't need to inherit from the auto_init commit. This is the only
+      // reliable way to avoid GitRPC::BadObjectState on freshly-created repos.
+      const treeEntries = [
+        { path: 'README.md', mode: '100644', type: 'blob', sha: readmeBlob.sha },
+        ...addEntries,
+      ];
+
       let latestParentSha = null;
-      let latestBaseTreeSha = null;
       try {
         latestParentSha = await getDefaultBranchSha(githubToken, job.owner, job.repoName, job.branch || 'main');
-        latestBaseTreeSha = await getCommitTreeSha(githubToken, job.owner, job.repoName, latestParentSha);
       } catch (_) {
         latestParentSha = job.parentSha || null;
-        latestBaseTreeSha = job.baseTreeSha || null;
       }
 
       debugLog('[Archiver] finalizeUpload tree entries', {
         attempt,
         addedFiles: files.map((entry) => entry.path),
-        deletedFiles: deleteEntries.map((entry) => entry.path),
         latestParentSha,
-        latestBaseTreeSha,
       });
 
       await reportProgress(job.courseId, `Creating commit tree (attempt ${attempt})`, 94);
-      const tree = await createTree(githubToken, job.owner, job.repoName, treeEntries, latestBaseTreeSha || null);
+      const tree = await createTree(githubToken, job.owner, job.repoName, treeEntries, null);
 
       await reportProgress(job.courseId, `Creating commit (attempt ${attempt})`, 97);
       commit = await createCommit(
@@ -758,6 +791,47 @@ async function waitForFileResolution(path, timeoutMs) {
   throw new Error('Timed out waiting for file fetch');
 }
 
+/**
+ * Fetch a file URL directly from the service worker.
+ * SW fetches share the browser cookie store (credentials: 'include' sends the
+ * user's Gradescope session) and are not subject to CORS — Gradescope → S3
+ * redirects succeed without any CORS headers required.
+ */
+async function fetchFileDirectly(url, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      credentials: 'include',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Fetch failed: ${response.status} ${response.statusText || ''}`.trim());
+    }
+    const mimeType = (response.headers.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
+    if (mimeType === 'text/html' || mimeType === 'application/xhtml+xml') {
+      throw new Error(`Received HTML instead of file — likely not authenticated or URL is wrong`);
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const dispMatch = /filename\*?=(?:UTF-\d+''\s*)?["']?([^;"'\n\r]+)["']?/i.exec(disposition);
+    const filename = dispMatch ? dispMatch[1].trim().replace(/["']/g, '') : '';
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_FILE_SIZE_BYTES) {
+      throw new Error(`File too large: ${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB (limit 50 MB)`);
+    }
+    // Convert ArrayBuffer → base64 in chunks to avoid call-stack overflow
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return { b64: btoa(binary), mimeType, filename };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function checkpointJob(uploadJob) {
   await chrome.storage.local.set({ uploadJob });
 }
@@ -793,149 +867,79 @@ async function enumerateCourseFiles(tabId, courseId) {
     world: 'MAIN',
     args: [courseId],
     func: async (innerCourseId) => {
+      // -----------------------------------------------------------------------
+      // Direct submission PDF enumeration.
+      // 1. Fetch the course page and parse graded assignments.
+      // 2. For each assignment, extract the submission ID from the URL itself,
+      //    or discover it by fetching the assignment page (which redirects to
+      //    the submission view or contains a link to it).
+      // 3. Build the canonical graded-copy URL: .../submissions/<sid>.pdf
+      // No probing, no parseFileLinks fallback, no guessing endpoints.
+      // -----------------------------------------------------------------------
       const scraper = window.gradescopeScraper;
-      if (!scraper || typeof scraper.parseAssignments !== 'function' || typeof scraper.parseFileLinks !== 'function') {
+      if (!scraper || typeof scraper.parseAssignments !== 'function') {
         return [];
       }
 
-      const courseCandidates = typeof scraper.parseCourseList === 'function'
-        ? scraper.parseCourseList(document)
-        : [];
-      const courseFromDashboard = (courseCandidates || []).find((course) => {
-        const match = String(course.url || '').match(/\/courses\/(\d+)/);
-        return match && match[1] === innerCourseId;
-      });
-
-      let courseUrl = courseFromDashboard?.url || '';
-      if (!courseUrl && window.location?.pathname?.includes(`/courses/${innerCourseId}`)) {
-        courseUrl = window.location.href;
-      }
-      if (!courseUrl) {
-        courseUrl = `https://www.gradescope.com/courses/${innerCourseId}`;
-      }
-
+      const courseUrl = `https://www.gradescope.com/courses/${innerCourseId}`;
       let courseDoc = document;
       try {
-        const courseResponse = await fetch(courseUrl, { credentials: 'include' });
-        if (courseResponse.ok) {
-          const courseHtml = await courseResponse.text();
-          courseDoc = new DOMParser().parseFromString(courseHtml, 'text/html');
+        // Only re-fetch if we're not already on this course's page
+        if (!window.location.pathname.startsWith(`/courses/${innerCourseId}`)) {
+          const courseResponse = await fetch(courseUrl, { credentials: 'include' });
+          if (courseResponse.ok) {
+            const courseHtml = await courseResponse.text();
+            courseDoc = new DOMParser().parseFromString(courseHtml, 'text/html');
+          }
         }
-      } catch (_) {
-      }
+      } catch (_) {}
 
       const assignments = scraper.parseAssignments(courseDoc)
-        .filter((assignment) => assignment.url && assignment.url.includes(`/courses/${innerCourseId}/assignments/`));
-
-      if (!assignments.length) {
-        const directAssignmentLinks = Array.from(courseDoc.querySelectorAll('a[href*="/courses/"]'))
-          .map((anchor) => anchor.getAttribute('href') || '')
-          .filter((href) => href.includes(`/courses/${innerCourseId}/assignments/`))
-          .map((href) => {
-            if (href.startsWith('http://') || href.startsWith('https://')) return href;
-            if (href.startsWith('/')) return `${window.location.origin}${href}`;
-            return href;
-          });
-        // For direct links, we don't have names, so create dummy assignments
-        directAssignmentLinks.forEach((url) => assignments.push({ name: 'Assignment', url }));
-      }
-
-      const uniqueAssignments = Array.from(new Map(assignments.map(a => [a.url, a])).values());
+        .filter((a) => a.url && a.url.includes(`/courses/${innerCourseId}/assignments/`));
 
       const uniqueFiles = new Map();
-      for (const assignment of uniqueAssignments) {
+      for (const assignment of assignments) {
         const assignmentUrl = assignment.url;
-        const assignmentName = assignment.name || 'Assignment';
-        if (assignmentUrl.includes('/submissions/new')) {
-          continue;
-        }
-        const assignmentBaseUrl = assignmentUrl.replace(/\/submissions\/[^\/]+$/, '');
+        if (assignmentUrl.includes('/submissions/new')) continue;
+
+        const assignmentName = (assignment.name || 'Assignment')
+          .replace(/[^a-zA-Z0-9._\- ]+/g, '_').slice(0, 50);
+
         try {
-          const response = await fetch(assignmentBaseUrl, { credentials: 'include' });
-          if (!response.ok) continue;
-          const html = await response.text();
-          const parsed = new DOMParser().parseFromString(html, 'text/html');
-          const links = scraper.parseFileLinks(parsed, assignmentBaseUrl);
+          // Strip any trailing submission/fragment to get the assignment base
+          const assignmentBase = assignmentUrl.replace(/\/submissions\/\d+.*/, '');
 
-          // If the assignment overview page has no file links, try the actual submission
-          // review page — this is the page that contains the PDF viewer iframe.
-          // The overview page (assignmentBaseUrl) never has the <iframe src=".pdf">.
-          let submissionLinks = [];
-          if (!links.length && assignmentUrl.includes('/submissions/')) {
-            try {
-              const subResponse = await fetch(assignmentUrl, { credentials: 'include' });
-              if (subResponse.ok) {
-                const subHtml = await subResponse.text();
-                const subDoc = new DOMParser().parseFromString(subHtml, 'text/html');
-                submissionLinks = scraper.parseFileLinks(subDoc, assignmentUrl);
-              }
-            } catch (_) {}
-          }
+          // Step 1: submission ID may already be in the parsed URL
+          // e.g. /courses/<cid>/assignments/<aid>/submissions/<sid>
+          let sid = (assignmentUrl.match(/\/submissions\/(\d+)/) || [])[1] || null;
 
-          const resolvedLinks = links.length ? links : submissionLinks;
-
-          const fallbackLinks = [];
-          if (!resolvedLinks.length && assignmentUrl.includes('/submissions/')) {
-            const base = assignmentUrl.split('#')[0];
-            const assignmentBase = assignmentUrl.replace(/\/submissions\/[^\/]+$/, '');
-            const sid = assignmentUrl.split('/submissions/')[1]?.split('/')[0];
-
-            // Probe candidates in order. The bare submission URL and `/download` are
-            // tried first — no hardcoded extensions. The Content-Type and
-            // Content-Disposition on the response tell us exactly what the file is,
-            // regardless of whether it is a PDF, ZIP, TAR, notebook, etc.
-            const candidates = [
-              base,                                                         // bare URL — server decides format
-              `${base}/download`,                                           // common download endpoint
-              `${base}/download_submission`,
-              `${assignmentBase}/download_submission?submission_id=${sid}`,
-              `${base}?download=1`,
-            ];
-
-            for (const candidate of candidates) {
-              try {
-                const probe = await fetch(candidate, {
-                  method: 'HEAD',
-                  credentials: 'include',
-                });
-                if (!probe.ok) continue;
-                const contentType = (probe.headers.get('Content-Type') || '').toLowerCase();
-                const rawDisposition = probe.headers.get('Content-Disposition') || '';
-                // Skip if the server is serving an HTML page (not a file)
-                const looksDownload = rawDisposition.toLowerCase().includes('attachment') || (
-                  !contentType.includes('text/html') && !contentType.includes('application/xhtml')
-                );
-                if (!looksDownload) continue;
-                const dispMatch = /filename\*?=(?:UTF-\d+''\s*)?["']?([^;"'\n\r]+)["']?/i.exec(rawDisposition);
-                const dispFilename = dispMatch ? dispMatch[1].trim().replace(/["']/g, '') : '';
-                fallbackLinks.push({ href: candidate, filenameHint: dispFilename, text: 'fallback-download' });
-                break;
-              } catch (_) {
+          // Step 2: if not in the URL, fetch to discover it via redirect or HTML
+          if (!sid) {
+            const resp = await fetch(assignmentUrl, { credentials: 'include' });
+            if (!resp.ok) continue;
+            // Gradescope may redirect students to their own submission view
+            const finalUrl = resp.url || assignmentUrl;
+            sid = (finalUrl.match(/\/submissions\/(\d+)/) || [])[1] || null;
+            if (!sid) {
+              const html = await resp.text();
+              const doc = new DOMParser().parseFromString(html, 'text/html');
+              for (const a of doc.querySelectorAll('a[href*="/submissions/"]')) {
+                const href = a.getAttribute('href') || '';
+                const m = href.match(/\/submissions\/(\d+)/);
+                if (m && !href.includes('/submissions/new')) { sid = m[1]; break; }
               }
             }
           }
 
-          const candidateLinks = resolvedLinks.length ? resolvedLinks : fallbackLinks;
+          if (!sid) continue;
 
-          for (const link of candidateLinks) {
-            const url = link.href;
-            if (!url || uniqueFiles.has(url)) continue;
-            // Prefer filenameHint from Content-Disposition; fall back to URL-derived name
-            const hintRaw = link.filenameHint || '';
-            const urlSegment = (() => { try { return new URL(url).pathname.split('/').filter(Boolean).pop() || ''; } catch(_) { return ''; } })();
-            const rawName = hintRaw || urlSegment || 'file';
-            const cleanName = rawName.replace(/[^a-zA-Z0-9._-]+/g, '_');
-            const submissionId = assignmentUrl.split('/submissions/')[1]?.split(/[/?#]/)[0] || 'submission';
-            const noExtNames = new Set(['download', 'download_submission', 'file', 'submission']);
-            const baseName = noExtNames.has(cleanName.split('.')[0].toLowerCase())
-              ? `submission-${submissionId}`
-              : cleanName;
-            const assignmentFolder = assignmentName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 50);
-            const path = `${assignmentFolder}/${baseName}`;
-            uniqueFiles.set(url, { url, path, filename: baseName });
-          }
-        } catch (_) {
-        }
+          const fileUrl = `${assignmentBase}/submissions/${sid}.pdf`;
+          if (uniqueFiles.has(fileUrl)) continue;
+
+          const filename = `submission-${sid}.pdf`;
+          const path = `${assignmentName}/${filename}`;
+          uniqueFiles.set(fileUrl, { url: fileUrl, path, filename });
+        } catch (_) {}
       }
       return Array.from(uniqueFiles.values());
     },
@@ -1054,11 +1058,52 @@ async function waitForTabLoad(tabId, timeoutMs = 30000) {
 }
 
 async function sendTabMessage(tabId, message) {
-  return chrome.tabs.sendMessage(tabId, message);
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (msg.includes('Receiving end does not exist') || msg.includes('Could not establish connection')) {
+      // Content script not ready yet — wait briefly, re-inject, then retry once
+      await sleep(800);
+      await ensureInjectScripts(tabId);
+      await sleep(300);
+      return await chrome.tabs.sendMessage(tabId, message);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Verifies a tabId is still open and on a Gradescope URL.
+ * If not, finds or creates a valid Gradescope tab and returns its id.
+ */
+async function ensureValidTab(tabId, courseId) {
+  if (tabId) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && tab.url && tab.url.includes('gradescope.com')) return tabId;
+    } catch (_) {
+      // tab was closed — fall through
+    }
+  }
+  // Tab is gone or not on Gradescope — get a fresh one
+  return ensureCourseTab(courseId);
 }
 
 function filenameFromPath(path) {
   return String(path || '').split('/').filter(Boolean).pop() || 'file';
+}
+
+/**
+ * Convert a human-readable course name into a valid GitHub repo slug.
+ * e.g. "CS 101 - Intro to Programming" → "cs-101-intro-to-programming"
+ */
+function slugify(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100) || null;
 }
 
 /** Map common MIME types to file extensions. */
@@ -1153,32 +1198,30 @@ function ensureExtension(path, ext) {
  * Given a Gradescope submission URL, return plausible alternate download URLs
  * to try when the primary URL returns JSON/HTML instead of the PDF.
  */
+/**
+ * Given a Gradescope submission URL, return the canonical .pdf URL to retry.
+ * Returns empty array if the URL already ends in .pdf (nothing useful to try).
+ */
 function deriveAlternateSubmissionUrls(origUrl) {
   try {
     const u = new URL(origUrl);
+    // Already a .pdf URL — no point retrying with the same thing
+    if (u.pathname.endsWith('.pdf')) return [];
     const origin = u.origin;
     const pathname = u.pathname || '';
-    // Match up to /submissions/<id>
-    const m = pathname.match(/(.*\/submissions\/\d+)/);
-    const candidates = [];
+    const m = pathname.match(/(.*\/submissions\/(\d+))/);
     if (m) {
-      const base = m[1];
-      candidates.push(`${origin}${base}/download`);
-      candidates.push(`${origin}${base}/download_submission`);
-      candidates.push(`${origin}${base}.pdf`);
-      candidates.push(`${origin}${base}?download=1`);
-      debugLog('[Archiver] alternate candidates', { origUrl, candidates });
-      return candidates;
+      const pdfUrl = `${origin}${m[1]}.pdf`;
+      if (pdfUrl !== origUrl) return [pdfUrl];
+      return [];
     }
-    // If URL contains download query param, try replacing with /download
-    if (u.searchParams.has('download')) {
-      candidates.push(`${origin}${pathname}/download`);
-      candidates.push(`${origin}${pathname}.pdf`);
+    const sid = u.searchParams.get('submission_id');
+    const assignmentMatch = pathname.match(/(.*\/assignments\/\d+)/);
+    if (sid && assignmentMatch) {
+      return [`${origin}${assignmentMatch[1]}/submissions/${sid}.pdf`];
     }
-    debugLog('[Archiver] alternate candidates', { origUrl, candidates });
-    return candidates;
-  } catch (err) {
-    debugLog('[Archiver] alternate candidate parse failed', { origUrl, error: String(err) });
+    return [];
+  } catch (_) {
     return [];
   }
 }

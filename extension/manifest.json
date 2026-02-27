@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Gradescope Archiver",
-  "version": "0.1.0",
-  "description": "Scrapes Gradescope, uploads to GitHub.",
+  "version": "0.2.0",
+  "description": "Archive your Gradescope submissions to a private GitHub repo — automatically.",
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "host_permissions": [
     "https://*.gradescope.com/*",
-    "https://api.github.com/*"
+    "https://api.github.com/*",
+    "https://*.amazonaws.com/*"
   ],
   "permissions": [
     "storage",
@@ -20,7 +21,7 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.gradescope.com/*"], 
+      "matches": ["https://*.gradescope.com/*"],
       "js": ["content-script.js"],
       "run_at": "document_idle"
     }
@@ -31,8 +32,24 @@
       "matches": ["https://*.gradescope.com/*"]
     }
   ],
-  "action": {
-    "default_popup": "popup.html"
+  "icons": {
+    "16":  "icons/16.png",
+    "48":  "icons/48.png",
+    "128": "icons/128.png"
   },
-  "options_page": "options.html"
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16":  "icons/16.png",
+      "48":  "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none';"
+  }
 }

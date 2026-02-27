@@ -25,7 +25,7 @@ export async function createRepo(token, repoName, { isPrivate = true } = {}) {
   const res = await fetch(`${GITHUB_API}/user/repos`, {
     method: 'POST',
     headers: ghHeaders(token),
-    body: JSON.stringify({ name: repoName, private: isPrivate, auto_init: true }),
+    body: JSON.stringify({ name: repoName, private: isPrivate }),
   });
   if (res.status === 422) {
     // Repo already exists — fetch and return it
@@ -34,6 +34,23 @@ export async function createRepo(token, repoName, { isPrivate = true } = {}) {
   }
   if (!res.ok) throw new Error(`createRepo failed: ${res.status} ${await res.text()}`);
   return res.json();
+}
+
+/**
+ * Initialize an empty repo by creating a placeholder commit via the Contents API.
+ * This is the only GitHub API that works on repos with zero commits.
+ * Returns { commitSha, branch } so callers can use Git Data API from here on.
+ */
+export async function initEmptyRepo(token, owner, repo, branch = 'main', readmeContent = '') {
+  const content = btoa(unescape(encodeURIComponent(readmeContent || `# ${repo}\n\nArchived from Gradescope.\n`)));
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/README.md`, {
+    method: 'PUT',
+    headers: ghHeaders(token),
+    body: JSON.stringify({ message: 'Initial commit', content, branch }),
+  });
+  if (!res.ok) throw new Error(`initEmptyRepo failed: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  return { commitSha: data.commit.sha, branch };
 }
 
 export async function getDefaultBranchSha(token, owner, repo, branch) {
@@ -121,4 +138,17 @@ export async function updateRef(token, owner, repo, branch, sha, parentSha) {
   });
   if (!res.ok) throw new Error(`updateRef failed: ${res.status} ${await res.text()}`);
   return res.json();
+}
+
+/**
+ * Validate a GitHub PAT by calling GET /user.
+ * Returns { login, name, avatarUrl } on success, throws on failure.
+ */
+export async function validateToken(token) {
+  if (!token || !token.trim()) throw new Error('Token is empty.');
+  const res = await fetch(`${GITHUB_API}/user`, { headers: ghHeaders(token) });
+  if (res.status === 401) throw new Error('Token rejected — check it has the "repo" scope.');
+  if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
+  const data = await res.json();
+  return { login: data.login, name: data.name, avatarUrl: data.avatar_url };
 }
